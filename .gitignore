@@ -1,9 +1,14 @@
 node_modules/
 .next/
 dist/
-data/session/
-data/logs/
+data/
+worker/data/
 .env
 .env.local
+.env.production
 *.log
 .DS_Store
+# session cookies (CRITICAL — never commit)
+**/data/session/
+**/data/logs/
+**/data/temp/

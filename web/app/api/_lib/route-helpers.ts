@@ -53,11 +53,15 @@ export class HttpError extends Error {
  * - HttpError     → its status + message
  * - everything else → 500 with a generic message (real error logged server-side)
  */
-export function handleRouteError(err: unknown): NextResponse | Response {
+export function handleRouteError(err: unknown): NextResponse {
   // requireWorker (and other auth helpers) throw a raw Response with the
-  // appropriate status + WWW-Authenticate header. Pass it through as-is.
+  // appropriate status + WWW-Authenticate header. Convert to NextResponse.
   if (err instanceof Response) {
-    return err;
+    const status = err.status;
+    return NextResponse.json(
+      { error: status === 401 ? 'unauthorized' : 'error', message: err.statusText || undefined },
+      { status, headers: err.headers as unknown as HeadersInit },
+    );
   }
   if (err instanceof ZodError) {
     const issues = err.issues

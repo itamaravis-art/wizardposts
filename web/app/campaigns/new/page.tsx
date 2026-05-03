@@ -43,6 +43,7 @@ const STEPS: Array<{ id: StepId; label: string }> = [
 
 function imageSrc(p: string | null | undefined): string | null {
   if (!p) return null;
+  if (/^https?:\/\//.test(p)) return p; // cloud Supabase URL
   const base = p.split(/[/\\]/).pop();
   return base ? `/images/${base}` : null;
 }
@@ -471,7 +472,7 @@ function StepPost({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[28rem] overflow-y-auto pr-1">
             {posts.map((p) => {
               const selected = postId === p.id;
-              const src = imageSrc(p.image_path);
+              const src = imageSrc(p.imageUrl ?? p.image_path);
               return (
                 <button
                   key={p.id}
@@ -953,9 +954,9 @@ function StepReview({
         <div className="text-xs text-slate-500 mb-2">פוסט</div>
         {post ? (
           <div className="flex gap-3 p-3 border border-slate-200 dark:border-border rounded-lg">
-            {imageSrc(post.image_path) ? (
+            {imageSrc(post.imageUrl ?? post.image_path) ? (
               <img
-                src={imageSrc(post.image_path)!}
+                src={imageSrc(post.imageUrl ?? post.image_path)!}
                 alt=""
                 className="w-20 h-20 rounded object-cover bg-slate-100 shrink-0"
               />

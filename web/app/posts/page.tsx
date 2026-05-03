@@ -26,10 +26,16 @@ import {
   Eye,
 } from '@/lib/icons';
 
-function imageSrc(image_path: string | null | undefined): string | null {
-  if (!image_path) return null;
-  const base = image_path.split(/[/\\]/).pop();
-  return base ? `/images/${base}` : null;
+function imageSrc(p: { imageUrl?: string | null; image_path?: string | null } | null | undefined): string | null {
+  if (!p) return null;
+  // Cloud version: imageUrl is a full Supabase public URL.
+  if (p.imageUrl) return p.imageUrl;
+  // Backwards-compat with local naming (image_path).
+  if (p.image_path) {
+    const base = p.image_path.split(/[/\\]/).pop();
+    return base ? `/images/${base}` : null;
+  }
+  return null;
 }
 
 export default function PostsPage() {
@@ -140,7 +146,7 @@ export default function PostsPage() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((p) => {
-            const src = imageSrc(p.image_path);
+            const src = imageSrc(p);
             return (
               <Card
                 key={p.id}
@@ -251,9 +257,9 @@ export default function PostsPage() {
       >
         {previewPost && (
           <div className="space-y-3">
-            {imageSrc(previewPost.image_path) && (
+            {imageSrc(previewPost) && (
               <img
-                src={imageSrc(previewPost.image_path)!}
+                src={imageSrc(previewPost)!}
                 alt=""
                 className="w-full max-h-96 object-contain rounded-lg bg-slate-50"
               />

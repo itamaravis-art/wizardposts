@@ -5,8 +5,12 @@ export type ISODate = string;
 export interface Post {
   id: ID;
   text: string;
-  image_path: string | null;
-  created_at: ISODate;
+  /** Cloud version: full Supabase public URL. */
+  imageUrl?: string | null;
+  /** Legacy local version: filesystem path. */
+  image_path?: string | null;
+  created_at?: ISODate;
+  createdAt?: ISODate;
 }
 
 export interface Group {

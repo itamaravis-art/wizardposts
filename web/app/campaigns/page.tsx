@@ -61,6 +61,7 @@ function statusBadgeVariant(s: CampaignStatus): 'success' | 'warning' | 'danger'
 
 function imageSrc(p: string | null | undefined): string | null {
   if (!p) return null;
+  if (/^https?:\/\//.test(p)) return p; // cloud Supabase URL
   const base = p.split(/[/\\]/).pop();
   return base ? `/images/${base}` : null;
 }
@@ -219,7 +220,7 @@ export default function CampaignsPage() {
             const done = (c as any).progress?.done ?? c.done_jobs ?? 0;
             const pct = total > 0 ? (done / total) * 100 : 0;
             const isRunning = c.status === 'running';
-            const src = imageSrc(c.post?.image_path);
+            const src = imageSrc(c.post?.imageUrl ?? c.post?.image_path);
             return (
               <Card
                 key={c.id}

@@ -83,11 +83,13 @@ function campaignStatusVariant(s: Campaign['status']): 'success' | 'warning' | '
 
 function imageSrc(p: string | null | undefined): string | null {
   if (!p) return null;
+  if (/^https?:\/\//.test(p)) return p; // cloud Supabase URL
   const base = p.split(/[/\\]/).pop();
   return base ? `/images/${base}` : null;
 }
 function screenshotSrc(p: string | null | undefined): string | null {
   if (!p) return null;
+  if (/^https?:\/\//.test(p)) return p; // cloud signed URL
   const base = p.split(/[/\\]/).pop();
   return base ? `/screenshots/${base}` : null;
 }
@@ -502,9 +504,9 @@ export default function CampaignDetailPage() {
               <SettingRow label="פוסט">
                 {data.post ? (
                   <div className="flex gap-2 items-start">
-                    {imageSrc(data.post.image_path) ? (
+                    {imageSrc(data.post.imageUrl ?? data.post.image_path) ? (
                       <img
-                        src={imageSrc(data.post.image_path)!}
+                        src={imageSrc(data.post.imageUrl ?? data.post.image_path)!}
                         alt=""
                         className="w-12 h-12 rounded object-cover bg-slate-100"
                       />

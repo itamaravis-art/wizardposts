@@ -60,11 +60,28 @@ const settingsPatchSchema = z
     { message: 'typing_min_ms must be ≤ typing_max_ms' },
   );
 
+// Convert internal camelCase settings → API snake_case shape (matches the
+// `Settings` type in web/lib/types.ts and what the UI expects).
+function toApi(s: Awaited<ReturnType<typeof getUserSettings>>) {
+  return {
+    daily_cap: s.dailyCap,
+    min_delay_ms: s.minDelayMs,
+    max_delay_ms: s.maxDelayMs,
+    work_hours_start: s.workHoursStart,
+    work_hours_end: s.workHoursEnd,
+    max_consecutive_fails: s.maxConsecutiveFails,
+    typing_min_ms: s.typingMinMs,
+    typing_max_ms: s.typingMaxMs,
+    fb_connected: s.fbConnected,
+    fb_user_name: s.fbUserName,
+  };
+}
+
 export async function GET() {
   try {
     const user = await requireUser();
-    const settings = await getUserSettings(user.id);
-    return NextResponse.json({ settings });
+    const s = await getUserSettings(user.id);
+    return NextResponse.json(toApi(s));
   } catch (err) {
     return handleRouteError(err);
   }
@@ -75,8 +92,8 @@ export async function PATCH(req: NextRequest) {
     const user = await requireUser();
     const json = await req.json().catch(() => ({}));
     const patch = settingsPatchSchema.parse(json);
-    const settings = await updateUserSettings(user.id, patch);
-    return NextResponse.json({ settings });
+    const s = await updateUserSettings(user.id, patch);
+    return NextResponse.json(toApi(s));
   } catch (err) {
     return handleRouteError(err);
   }

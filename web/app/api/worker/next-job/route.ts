@@ -44,21 +44,32 @@ export async function GET(req: NextRequest) {
       return new Response(null, { status: 204 });
     }
 
+    // The raw SQL `RETURNING *` from claimNextJobForUser returns snake_case
+    // column names (`campaign_id`, `group_id`), NOT Drizzle's camelCase keys.
+    // Read with both keys for safety.
+    const c = claimed as Record<string, unknown>;
+    const campaignId = (c.campaignId ?? c.campaign_id) as string | undefined;
+    const groupId = (c.groupId ?? c.group_id) as string | undefined;
+    if (!campaignId || !groupId) {
+      // Should never happen — bail to a safe 204 rather than 500.
+      return new Response(null, { status: 204 });
+    }
+
     // Enrich with campaign + post + group so the worker can post without
     // additional round-trips. Worker expects: { job, campaign, post, group }.
-    const campaign = await getCampaign(claimed.campaignId, userId);
+    const campaign = await getCampaign(campaignId, userId);
     const post = campaign ? await getPostForUser(userId, campaign.postId) : null;
     const [group] = await db
       .select()
       .from(groups)
-      .where(eq(groups.id, claimed.groupId))
+      .where(eq(groups.id, groupId))
       .limit(1);
 
     return NextResponse.json({
       job: {
         id: claimed.id,
-        attempts: claimed.attempts,
-        status: claimed.status,
+        attempts: (c.attempts as number | undefined) ?? 0,
+        status: (c.status as string | undefined) ?? 'running',
       },
       campaign: campaign
         ? {

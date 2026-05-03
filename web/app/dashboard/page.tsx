@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { apiGet, apiPost } from '@/lib/api';
-import type { DashboardData } from '@/lib/types';
+import type { DashboardData, ID } from '@/lib/types';
 import {
   Card,
   CardHeader,
@@ -84,7 +84,7 @@ function isWithinWorkHours(start: number, end: number): boolean {
 export default function DashboardPage() {
   const [data, setData] = useState<ExtendedDashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busyCampaign, setBusyCampaign] = useState<number | null>(null);
+  const [busyCampaign, setBusyCampaign] = useState<ID | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -202,7 +202,7 @@ export default function DashboardPage() {
   const underDailyCap = dailyCap === 0 ? true : todayCount < dailyCap;
 
   // ------- Campaign actions (Pause/Resume) -------
-  const handlePause = useCallback(async (id: number) => {
+  const handlePause = useCallback(async (id: ID) => {
     setBusyCampaign(id);
     try {
       await apiPost(`/api/campaigns/${id}/pause`);
@@ -215,7 +215,7 @@ export default function DashboardPage() {
     }
   }, [load]);
 
-  const handleResume = useCallback(async (id: number) => {
+  const handleResume = useCallback(async (id: ID) => {
     setBusyCampaign(id);
     try {
       await apiPost(`/api/campaigns/${id}/resume`);

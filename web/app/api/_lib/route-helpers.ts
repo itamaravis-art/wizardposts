@@ -54,14 +54,15 @@ export class HttpError extends Error {
  * - everything else → 500 with a generic message (real error logged server-side)
  */
 export function handleRouteError(err: unknown): NextResponse {
-  // requireWorker (and other auth helpers) throw a raw Response with the
-  // appropriate status + WWW-Authenticate header. Convert to NextResponse.
+  // requireWorker (and other auth helpers) throw a raw Response that already
+  // contains the proper JSON body, status, and WWW-Authenticate header. We
+  // wrap it in a NextResponse without remarshaling so the descriptive
+  // `message` from the auth helper survives.
   if (err instanceof Response) {
-    const status = err.status;
-    return NextResponse.json(
-      { error: status === 401 ? 'unauthorized' : 'error', message: err.statusText || undefined },
-      { status, headers: err.headers as unknown as HeadersInit },
-    );
+    return new NextResponse(err.body, {
+      status: err.status,
+      headers: err.headers,
+    });
   }
   if (err instanceof ZodError) {
     const issues = err.issues
@@ -85,4 +86,46 @@ export function handleRouteError(err: unknown): NextResponse {
     { error: 'Internal server error' },
     { status: 500 },
   );
+}
+
+/* ------------------------------------------------------------------ */
+/* Serialization helpers                                              */
+/*                                                                    */
+/* Drizzle's `.select()` returns objects keyed by the JS column name  */
+/* (camelCase). The dashboard / pages all expect snake_case wire      */
+/* shapes (matching `web/lib/types.ts`). These helpers convert at the */
+/* API boundary so we don't have to rewrite every query.              */
+/* ------------------------------------------------------------------ */
+
+function camelToSnake(str: string): string {
+  return str.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
+}
+
+/**
+ * Recursively rewrite an object's keys from camelCase to snake_case.
+ *
+ * - Date instances are converted to ISO strings (so they survive JSON.stringify
+ *   in a stable shape; some callers like Vercel Serverless will do this anyway,
+ *   but doing it explicitly keeps tests deterministic).
+ * - `Date | null` → `string | null`
+ * - boolean `active`-style fields are LEFT as booleans; UI code that treats
+ *   `active === 1` should be tolerated by sending both `active` (bool) and the
+ *   caller can decide. We don't 0/1-coerce here to avoid lying about types.
+ * - Arrays are mapped element-wise.
+ * - Anything that isn't a plain object/array/Date is returned unchanged.
+ */
+export function toSnake<T = unknown>(value: unknown): T {
+  if (value === null || value === undefined) return value as T;
+  if (value instanceof Date) return value.toISOString() as unknown as T;
+  if (Array.isArray(value)) {
+    return value.map((v) => toSnake(v)) as unknown as T;
+  }
+  if (typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[camelToSnake(k)] = toSnake(v);
+    }
+    return out as T;
+  }
+  return value as T;
 }

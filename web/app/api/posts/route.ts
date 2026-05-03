@@ -11,7 +11,22 @@ import {
   listPostsForUser,
   createPostForUser,
 } from '@/lib/db/queries/posts';
-import { getUserId, handleRouteError } from '../_lib/route-helpers';
+import { getUserId, handleRouteError, toSnake } from '../_lib/route-helpers';
+
+// UI consumes a hybrid shape:
+//   - `p.imageUrl` (camelCase, matches Drizzle output)
+//   - `p.image_path` (legacy local-version filename)
+//   - `p.created_at` (snake_case timestamp)
+// We send `imageUrl` AND `image_url` and `created_at` AND `createdAt` so every
+// caller sees what it's already coded against.
+function toPostWire(p: Record<string, unknown>): Record<string, unknown> {
+  const snake = toSnake<Record<string, unknown>>(p);
+  return {
+    ...snake,
+    imageUrl: p.imageUrl ?? null,
+    createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : (p.createdAt ?? null),
+  };
+}
 
 export const runtime = 'nodejs';
 
@@ -25,7 +40,7 @@ export async function GET() {
   try {
     const userId = await getUserId();
     const posts = await listPostsForUser(userId);
-    return NextResponse.json(posts);
+    return NextResponse.json(posts.map(toPostWire));
   } catch (err) {
     return handleRouteError(err);
   }
@@ -61,7 +76,7 @@ export async function POST(req: NextRequest) {
     }
 
     const post = await createPostForUser(userId, { text, imageUrl });
-    return NextResponse.json(post, { status: 201 });
+    return NextResponse.json(toPostWire(post), { status: 201 });
   } catch (err) {
     return handleRouteError(err);
   }

@@ -7,6 +7,7 @@ import {
   getUserId,
   handleRouteError,
   HttpError,
+  toSnake,
 } from '../_lib/route-helpers';
 
 export const runtime = 'nodejs';
@@ -44,7 +45,8 @@ export async function GET(req: NextRequest) {
       level: (levelParam ?? undefined) as 'info' | 'warn' | 'error' | undefined,
       source,
     });
-    return NextResponse.json(logs);
+    // Logs page reads `l.created_at` — return snake_case wire shape.
+    return NextResponse.json(toSnake(logs));
   } catch (err) {
     return handleRouteError(err);
   }

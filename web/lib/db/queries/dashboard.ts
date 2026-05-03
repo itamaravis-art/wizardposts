@@ -12,18 +12,44 @@ import {
   groups,
   jobs,
   logs,
-  type Campaign,
-  type Job,
 } from '../schema';
 import { getTodayCount } from './counters';
 import { getUserSettings } from './settings';
 
-export interface DashboardActiveCampaign extends Campaign {
+// Wire shape — snake_case so the UI can consume directly without remapping.
+export interface DashboardActiveCampaign {
+  id: string;
+  user_id: string;
+  name: string;
+  post_id: string;
+  status: string;
+  daily_cap: number;
+  min_delay_ms: number;
+  max_delay_ms: number;
+  work_hours_start: number;
+  work_hours_end: number;
+  text_variations: boolean;
+  scheduled_start_at: Date | null;
+  created_at: Date;
+  started_at: Date | null;
+  finished_at: Date | null;
+  last_error: string | null;
   total_jobs: number;
   done_jobs: number;
 }
 
-export interface DashboardRecentJob extends Job {
+export interface DashboardRecentJob {
+  id: string;
+  campaign_id: string;
+  group_id: string;
+  status: string;
+  attempts: number;
+  scheduled_at: Date | null;
+  started_at: Date | null;
+  finished_at: Date | null;
+  result_message: string | null;
+  screenshot_path: string | null;
+  claimed_by_token: string | null;
   group_name: string | null;
   group_url: string;
 }
@@ -164,12 +190,37 @@ export async function getDashboardForUser(
     today_count: todayCount,
     daily_cap: settings.daily_cap,
     active_campaigns: activeCampaignsRaw.map((r) => ({
-      ...r.campaign,
+      id: r.campaign.id,
+      user_id: r.campaign.userId,
+      name: r.campaign.name,
+      post_id: r.campaign.postId,
+      status: r.campaign.status,
+      daily_cap: r.campaign.dailyCap,
+      min_delay_ms: r.campaign.minDelayMs,
+      max_delay_ms: r.campaign.maxDelayMs,
+      work_hours_start: r.campaign.workHoursStart,
+      work_hours_end: r.campaign.workHoursEnd,
+      text_variations: r.campaign.textVariations,
+      scheduled_start_at: r.campaign.scheduledStartAt,
+      created_at: r.campaign.createdAt,
+      started_at: r.campaign.startedAt,
+      finished_at: r.campaign.finishedAt,
+      last_error: r.campaign.lastError,
       total_jobs: r.total_jobs,
       done_jobs: r.done_jobs,
     })),
     recent_jobs: recentJobsRaw.map((r) => ({
-      ...r.job,
+      id: r.job.id,
+      campaign_id: r.job.campaignId,
+      group_id: r.job.groupId,
+      status: r.job.status,
+      attempts: r.job.attempts,
+      scheduled_at: r.job.scheduledAt,
+      started_at: r.job.startedAt,
+      finished_at: r.job.finishedAt,
+      result_message: r.job.resultMessage,
+      screenshot_path: r.job.screenshotPath,
+      claimed_by_token: r.job.claimedByToken,
       group_name: r.group_name,
       group_url: r.group_url,
     })),

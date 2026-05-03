@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { apiGet, apiPost } from '@/lib/api';
-import type { Post, Group, Settings } from '@/lib/types';
+import type { Post, Group, Settings, ID } from '@/lib/types';
 import { msToMinutes, minutesToMs } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
@@ -68,10 +68,9 @@ function NewCampaignPage() {
   // form
   const [step, setStep] = useState<StepId>('post');
   const [name, setName] = useState('');
-  const [postId, setPostId] = useState<number | null>(
-    presetPostId ? Number(presetPostId) : null
-  );
-  const [groupIds, setGroupIds] = useState<Set<number>>(new Set());
+  // postId may be a string UUID (cloud) or a numeric rowid (legacy local).
+  const [postId, setPostId] = useState<ID | null>(presetPostId ?? null);
+  const [groupIds, setGroupIds] = useState<Set<ID>>(new Set());
   const [groupSearch, setGroupSearch] = useState('');
 
   const [dailyCap, setDailyCap] = useState(12);
@@ -111,8 +110,10 @@ function NewCampaignPage() {
     })();
   }, []);
 
+  // Compare IDs as strings — cloud uses UUIDs, legacy used numeric rowids,
+  // and URL-derived presetPostId is always a string.
   const selectedPost = useMemo(
-    () => posts.find((p) => p.id === postId) ?? null,
+    () => posts.find((p) => String(p.id) === String(postId)) ?? null,
     [posts, postId]
   );
 
@@ -136,7 +137,7 @@ function NewCampaignPage() {
     return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b, 'he'));
   }, [groups, groupSearch]);
 
-  function toggleGroup(id: number) {
+  function toggleGroup(id: ID) {
     setGroupIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -423,8 +424,8 @@ function StepPost({
   name: string;
   setName: (v: string) => void;
   posts: Post[];
-  postId: number | null;
-  setPostId: (id: number) => void;
+  postId: ID | null;
+  setPostId: (id: ID) => void;
   errors: Record<string, string>;
 }) {
   return (
@@ -471,7 +472,7 @@ function StepPost({
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[28rem] overflow-y-auto pr-1">
             {posts.map((p) => {
-              const selected = postId === p.id;
+              const selected = String(postId) === String(p.id);
               const src = imageSrc(p.imageUrl ?? p.image_path);
               return (
                 <button
@@ -537,8 +538,8 @@ function StepGroups({
   groupedByTag: Array<[string, Group[]]>;
   search: string;
   setSearch: (v: string) => void;
-  groupIds: Set<number>;
-  toggleGroup: (id: number) => void;
+  groupIds: Set<ID>;
+  toggleGroup: (id: ID) => void;
   setTagSelected: (tag: string, gs: Group[], select: boolean) => void;
   clearAll: () => void;
   errors: Record<string, string>;
@@ -922,7 +923,7 @@ function StepReview({
 }: {
   name: string;
   post: Post | null;
-  groupIds: Set<number>;
+  groupIds: Set<ID>;
   groups: Group[];
   dailyCap: number;
   minDelayMin: number;

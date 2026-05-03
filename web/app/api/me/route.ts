@@ -30,7 +30,18 @@ export async function GET() {
     if (!row) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
-    return NextResponse.json(row);
+    // UI consumes snake_case (`me.fb_connected`, `me.fb_user_name`); see
+    // app/connect/page.tsx, app/onboarding/page.tsx etc. Convert at the
+    // boundary so we don't have to rename Drizzle's column accessors.
+    return NextResponse.json({
+      id: row.id,
+      email: row.email,
+      name: row.name,
+      image: row.image,
+      fb_connected: row.fbConnected,
+      fb_user_name: row.fbUserName,
+      created_at: row.createdAt,
+    });
   } catch (err) {
     return handleRouteError(err);
   }

@@ -88,10 +88,13 @@ export function useEvents(
         return;
       }
       setLastEvent(parsed);
+      // Newest event is at index 0. Consumers (logs/campaigns/dashboard pages)
+      // read `events[0]` as the most recent and key effects on
+      // `events?.[0]?.id` to detect new arrivals — that contract only holds
+      // when we prepend rather than append.
       setEvents((prev) => {
-        const next = prev.length >= bufferSize ? prev.slice(prev.length - bufferSize + 1) : prev.slice();
-        next.push(parsed);
-        return next;
+        const next = [parsed, ...prev];
+        return next.length > bufferSize ? next.slice(0, bufferSize) : next;
       });
       try {
         onEventRef.current?.(parsed);

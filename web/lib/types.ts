@@ -1,5 +1,10 @@
-// Mirrors src/types/models.ts (kept local because web has its own tsconfig)
-export type ID = number;
+// Mirrors src/types/models.ts (kept local because web has its own tsconfig).
+//
+// IMPORTANT: The cloud SaaS backend uses Postgres UUIDs (string) for primary
+// keys, while the original local desktop app used integer rowids (number).
+// `ID` is therefore `string | number` — most call sites just pass the value
+// through (template literals, Map keys, `===` comparisons) so this is safe.
+export type ID = string | number;
 export type ISODate = string;
 
 export interface Post {
@@ -7,6 +12,8 @@ export interface Post {
   text: string;
   /** Cloud version: full Supabase public URL. */
   imageUrl?: string | null;
+  /** Snake-case alias also emitted by the API for older callers. */
+  image_url?: string | null;
   /** Legacy local version: filesystem path. */
   image_path?: string | null;
   created_at?: ISODate;
@@ -21,6 +28,7 @@ export interface Group {
   last_posted_at: ISODate | null;
   success_count: number;
   fail_count: number;
+  /** Backend wires `0 | 1` (UI compares `=== 1`). Boolean is also tolerated. */
   active: 0 | 1;
   created_at: ISODate;
 }
@@ -37,10 +45,13 @@ export interface Campaign {
   max_delay_ms: number;
   work_hours_start: number;
   work_hours_end: number;
-  text_variations: 0 | 1;
+  /** Backend wires snake_case boolean. UI treats truthy/falsy. */
+  text_variations: 0 | 1 | boolean;
   created_at: ISODate;
   started_at: ISODate | null;
   finished_at: ISODate | null;
+  /** When the campaign is queued to start. Null = start immediately. */
+  scheduled_start_at?: ISODate | null;
   last_error: string | null;
 }
 
@@ -60,7 +71,8 @@ export interface Job {
 }
 
 export interface Settings {
-  id: 1;
+  /** Singleton row id in the legacy local DB; not present in cloud. */
+  id?: 1;
   daily_cap: number;
   min_delay_ms: number;
   max_delay_ms: number;
@@ -69,9 +81,11 @@ export interface Settings {
   max_consecutive_fails: number;
   typing_min_ms: number;
   typing_max_ms: number;
-  fb_connected: 0 | 1;
+  /** Cloud may return boolean; legacy returned 0|1. Treat as truthy. */
+  fb_connected: 0 | 1 | boolean;
   fb_user_name: string | null;
-  fb_connected_at: ISODate | null;
+  /** Optional — present in legacy payloads, not always in cloud. */
+  fb_connected_at?: ISODate | null;
 }
 
 export interface LogEntry {
@@ -86,11 +100,18 @@ export interface LogEntry {
 export interface DashboardData {
   today_count: number;
   daily_cap: number;
-  active_campaigns: Array<Campaign & { total_jobs: number; done_jobs: number }>;
+  active_campaigns: Array<Campaign & { total_jobs: number; done_jobs: number; current_group?: string | null }>;
   recent_jobs: Array<Job & { group_name?: string | null; group_url?: string }>;
   recent_errors: LogEntry[];
-  fb_connected: 0 | 1;
+  fb_connected: 0 | 1 | boolean;
   fb_user_name: string | null;
+  /** Optional — present when the backend can compute them. */
+  success_count?: number;
+  fail_count?: number;
+  pending_jobs?: number;
+  yesterday_count?: number;
+  work_hours_start?: number;
+  work_hours_end?: number;
 }
 
 /* ───────────────── SaaS-only additions ───────────────── */
@@ -103,6 +124,7 @@ export interface MeResponse {
   fb_connected?: boolean;
   fb_user_name?: string | null;
   worker_online?: boolean;
+  created_at?: ISODate;
 }
 
 export interface WorkerToken {
@@ -114,4 +136,3 @@ export interface WorkerToken {
   /** Plaintext token — present only on creation response; never afterwards. */
   token?: string;
 }
-

@@ -17,49 +17,60 @@ export interface HeartbeatRequest {
 }
 
 export interface WorkerSettings {
+  // FB connection state (mirrored on the user row).
   fb_connected: boolean;
   fb_user_name: string | null;
   // Posting cadence
+  daily_cap: number;
   min_delay_ms: number;
   max_delay_ms: number;
   typing_min_ms: number;
   typing_max_ms: number;
   // Working hours window (24h, in user's local time on the cloud side)
   work_hours_start: number; // 0-23
-  work_hours_end: number;   // 0-23 (exclusive)
-  spin_variations: boolean;
+  work_hours_end: number;   // 0-24 (exclusive)
+  max_consecutive_fails: number;
 }
 
 export interface HeartbeatResponse {
   userId: string;
   fbConnected: boolean;
+  fbUserName: string | null;
   settings: WorkerSettings;
 }
 
+/**
+ * Shape returned by GET /api/worker/next-job (200 case).
+ * Cloud returns 204 No Content when nothing is pending — that becomes `null`
+ * in `getNextJob()` below.
+ *
+ * `campaign`, `post` and `group` may each be null if their underlying row was
+ * deleted between job creation and the worker claiming it (rare but possible).
+ * The worker rejects such jobs as un-runnable.
+ */
 export interface JobPayload {
   job: {
     id: string;
-    campaign_id: string;
-    post_id: string;
-    group_id: string;
-    status: 'pending' | 'in_progress' | 'completed' | 'failed';
-    attempt: number;
+    status: 'pending' | 'running' | 'success' | 'failed';
+    attempts: number;
   };
   campaign: {
     id: string;
     name: string;
+    min_delay_ms: number;
+    max_delay_ms: number;
     text_variations: boolean;
-  };
+  } | null;
   post: {
     id: string;
     text: string;
     image_url: string | null; // signed URL from Supabase Storage
-  };
+  } | null;
   group: {
     id: string;
     url: string;
     name: string | null;
-  };
+  } | null;
 }
 
 export interface ReportResultPayload {
@@ -230,17 +241,20 @@ export async function heartbeat(req: HeartbeatRequest = {}): Promise<HeartbeatRe
 /**
  * Pull the next due job assigned to this user.
  * Endpoint: GET /api/worker/next-job
- * Returns null when no work is available.
+ *
+ * Cloud responses:
+ *   - 200 + JobPayload   -> claim succeeded, work to do
+ *   - 204 No Content     -> nothing pending (apiFetch returns null)
+ *   - 404 Not Found      -> treat as nothing pending (defensive)
  */
 export async function getNextJob(): Promise<JobPayload | null> {
   try {
-    const res = await apiFetch<JobPayload | { job: null } | null>({
+    const res = await apiFetch<JobPayload | null>({
       method: 'GET',
       pathname: '/api/worker/next-job',
     });
-    if (!res) return null;
-    if ('job' in res && res.job === null) return null;
-    return res as JobPayload;
+    if (!res || !res.job) return null;
+    return res;
   } catch (err) {
     if (err instanceof WorkerHttpError && err.status === 404) return null;
     throw err;
@@ -249,15 +263,47 @@ export async function getNextJob(): Promise<JobPayload | null> {
 
 /**
  * Report job result back to cloud.
- * Endpoint: PATCH /api/worker/jobs/:id
+ *
+ * Primary endpoint:  PATCH /api/worker/jobs/:id
+ * Legacy fallback:   POST  /api/worker/jobs/:id/result
+ *
+ * Older deployments don't have the PATCH route yet. We try PATCH first; if the
+ * cloud returns 404 (route truly missing — distinguished from 404 "job not
+ * found" by the response body, which is an HTML 404 page in the route-missing
+ * case and JSON `{ error: ... }` in the not-found case), we fall back to the
+ * POST endpoint that the cloud has always supported.
  */
 export async function reportResult(
   jobId: string,
   payload: ReportResultPayload,
 ): Promise<void> {
+  const id = encodeURIComponent(jobId);
+  try {
+    await apiFetch<unknown>({
+      method: 'PATCH',
+      pathname: `/api/worker/jobs/${id}`,
+      body: payload,
+    });
+    return;
+  } catch (err) {
+    // Only fall back when the *route* is missing, not when the cloud
+    // legitimately rejected the report (e.g. 401 token issues, 404 with JSON
+    // body for "job not claimed by this worker", 5xx that already retried).
+    const isRouteMissing =
+      err instanceof WorkerHttpError &&
+      err.status === 404 &&
+      // The Next.js 404 page is HTML; a real "job not found" is JSON.
+      err.body.trimStart().startsWith('<');
+    if (!isRouteMissing) throw err;
+    logger.warn(
+      { jobId },
+      'api: PATCH /api/worker/jobs/:id is 404 on this deployment, falling back to POST /result',
+    );
+  }
+
   await apiFetch<unknown>({
-    method: 'PATCH',
-    pathname: `/api/worker/jobs/${encodeURIComponent(jobId)}`,
+    method: 'POST',
+    pathname: `/api/worker/jobs/${id}/result`,
     body: payload,
   });
 }

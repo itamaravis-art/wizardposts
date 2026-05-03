@@ -7,12 +7,11 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { requireUser } from '@/lib/auth/server';
 import {
   getUserSettings,
   updateUserSettings,
 } from '@/lib/db/queries/settings';
-import { handleRouteError } from '../_lib/route-helpers';
+import { getUserId, handleRouteError } from '../_lib/route-helpers';
 
 export const runtime = 'nodejs';
 
@@ -65,8 +64,8 @@ const settingsPatchSchema = z
 // read `s.daily_cap` as undefined and produces NaN downstream.
 export async function GET() {
   try {
-    const user = await requireUser();
-    const s = await getUserSettings(user.id);
+    const userId = await getUserId();
+    const s = await getUserSettings(userId);
     return NextResponse.json(s);
   } catch (err) {
     return handleRouteError(err);
@@ -75,10 +74,10 @@ export async function GET() {
 
 export async function PATCH(req: NextRequest) {
   try {
-    const user = await requireUser();
+    const userId = await getUserId();
     const json = await req.json().catch(() => ({}));
     const patch = settingsPatchSchema.parse(json);
-    const s = await updateUserSettings(user.id, patch);
+    const s = await updateUserSettings(userId, patch);
     return NextResponse.json(s);
   } catch (err) {
     return handleRouteError(err);

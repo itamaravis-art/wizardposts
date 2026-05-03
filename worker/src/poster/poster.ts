@@ -39,9 +39,26 @@ async function safeScreenshot(
   try {
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `job-${jobId}-${outcome}.png`);
-    await page.screenshot({ path: file, fullPage: false }).catch(() => {});
+    let captured = true;
+    await page.screenshot({ path: file, fullPage: false }).catch((err) => {
+      captured = false;
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err), file },
+        'poster: screenshot capture failed',
+      );
+    });
+    if (!captured) return null;
+    // Verify the file actually landed on disk (some headless modes fail silently).
+    if (!fs.existsSync(file)) {
+      logger.warn({ file }, 'poster: screenshot file missing after capture');
+      return null;
+    }
     return file;
-  } catch {
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'poster: safeScreenshot threw',
+    );
     return null;
   }
 }

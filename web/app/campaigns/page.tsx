@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { apiGet, apiPost } from '@/lib/api';
-import type { Campaign, CampaignStatus, Post } from '@/lib/types';
+import type { Campaign, CampaignStatus, Post, ID } from '@/lib/types';
 import { formatRelative, statusLabel } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
@@ -70,8 +70,8 @@ export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<CampaignWithStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | CampaignStatus>('all');
-  const [confirm, setConfirm] = useState<{ id: number; action: 'cancel' } | null>(null);
-  const [busy, setBusy] = useState<number | null>(null);
+  const [confirm, setConfirm] = useState<{ id: ID; action: 'cancel' } | null>(null);
+  const [busy, setBusy] = useState<ID | null>(null);
 
   // SSE for live progress
   const { events } = useEvents(['job.finished', 'campaign.updated', 'campaign.progress']);
@@ -113,7 +113,7 @@ export default function CampaignsPage() {
     return map;
   }, [campaigns]);
 
-  async function action(id: number, type: 'start' | 'pause' | 'resume' | 'cancel') {
+  async function action(id: ID, type: 'start' | 'pause' | 'resume' | 'cancel') {
     setBusy(id);
     try {
       await apiPost(`/api/campaigns/${id}/${type}`);

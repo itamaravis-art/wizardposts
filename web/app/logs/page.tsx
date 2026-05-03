@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiGet } from '@/lib/api';
-import type { LogEntry } from '@/lib/types';
+import type { LogEntry, ID } from '@/lib/types';
 import { formatDate, formatRelative } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
@@ -63,10 +63,10 @@ export default function LogsPage() {
   // Live tail
   const [liveTail, setLiveTail] = useState(true);
   const [page, setPage] = useState(1);
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [expanded, setExpanded] = useState<Set<ID>>(new Set());
 
   const { events } = useEvents(['log.added']);
-  const seenIds = useRef<Set<number>>(new Set());
+  const seenIds = useRef<Set<ID>>(new Set());
 
   async function load(showSkeleton = false) {
     if (showSkeleton) setLoading(true);
@@ -141,7 +141,7 @@ export default function LogsPage() {
     setPage(1);
   }, [search, from, to]);
 
-  function toggleExpand(id: number) {
+  function toggleExpand(id: ID) {
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);

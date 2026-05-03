@@ -7,7 +7,7 @@ import {
   updateCampaignStatusForUser,
 } from '@/lib/db/queries/campaigns';
 import type { CampaignStatus } from '@/lib/db/schema';
-import { getUserId, handleRouteError } from './route-helpers';
+import { getUserId, handleRouteError, toSnake } from './route-helpers';
 
 export async function lifecycleHandler(
   campaignId: string,
@@ -36,7 +36,7 @@ export async function lifecycleHandler(
       campaignId,
       target,
     );
-    return NextResponse.json(updated);
+    return NextResponse.json(toSnake(updated));
   } catch (err) {
     return handleRouteError(err);
   }

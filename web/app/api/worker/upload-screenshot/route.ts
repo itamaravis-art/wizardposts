@@ -17,11 +17,13 @@ export async function POST(req: NextRequest) {
     const { userId } = await requireWorker(req);
 
     const form = await req.formData();
-    const file = form.get('screenshot') ?? form.get('image');
+    // Worker (worker/src/api-client.ts) sends the file under the field name
+    // `file`. Older test scripts used `screenshot` or `image`. Accept all.
+    const file = form.get('file') ?? form.get('screenshot') ?? form.get('image');
     if (!(file instanceof File)) {
       throw new HttpError(
         400,
-        'Missing "screenshot" file in form data',
+        'Missing screenshot file in form data (field name: "file")',
       );
     }
     if (file.size === 0) {

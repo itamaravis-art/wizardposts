@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { apiGet, apiDelete } from '@/lib/api';
-import type { Post } from '@/lib/types';
+import type { Post, ID } from '@/lib/types';
 import { formatRelative } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
@@ -43,7 +43,7 @@ export default function PostsPage() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [confirmId, setConfirmId] = useState<number | null>(null);
+  const [confirmId, setConfirmId] = useState<ID | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [previewPost, setPreviewPost] = useState<Post | null>(null);
 
@@ -69,7 +69,7 @@ export default function PostsPage() {
     return posts.filter((p) => p.text.toLowerCase().includes(s));
   }, [posts, search]);
 
-  async function doDelete(id: number) {
+  async function doDelete(id: ID) {
     setDeleting(true);
     try {
       await apiDelete(`/api/posts/${id}`);

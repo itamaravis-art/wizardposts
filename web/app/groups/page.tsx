@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
-import type { Group } from '@/lib/types';
+import type { Group, ID } from '@/lib/types';
 import { formatRelative } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
@@ -60,17 +60,17 @@ export default function GroupsPage() {
   const [page, setPage] = useState(1);
 
   // selection
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [selected, setSelected] = useState<Set<ID>>(new Set());
 
   // inline edit
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<ID | null>(null);
   const [editName, setEditName] = useState('');
   const [editTag, setEditTag] = useState('');
 
   // dialogs
   const [addOpen, setAddOpen] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState<number[] | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<ID[] | null>(null);
   const [busyAction, setBusyAction] = useState(false);
 
   async function load(showSkeleton = true) {
@@ -155,7 +155,7 @@ export default function GroupsPage() {
       return next;
     });
   }
-  function toggleOne(id: number) {
+  function toggleOne(id: ID) {
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -173,7 +173,7 @@ export default function GroupsPage() {
     setEditName(g.name ?? '');
     setEditTag(g.tag ?? '');
   }
-  async function saveEdit(id: number) {
+  async function saveEdit(id: ID) {
     setBusyAction(true);
     try {
       await apiPatch(`/api/groups/${id}`, {
@@ -230,7 +230,7 @@ export default function GroupsPage() {
     }
   }
 
-  async function bulkDelete(ids: number[]) {
+  async function bulkDelete(ids: ID[]) {
     setBusyAction(true);
     try {
       await Promise.all(ids.map((id) => apiDelete(`/api/groups/${id}`)));

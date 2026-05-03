@@ -6,7 +6,16 @@ import {
   getPostForUser,
   deletePostForUser,
 } from '@/lib/db/queries/posts';
-import { getUserId, handleRouteError } from '../../_lib/route-helpers';
+import { getUserId, handleRouteError, toSnake } from '../../_lib/route-helpers';
+
+function toPostWire(p: Record<string, unknown>): Record<string, unknown> {
+  const snake = toSnake<Record<string, unknown>>(p);
+  return {
+    ...snake,
+    imageUrl: p.imageUrl ?? null,
+    createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : (p.createdAt ?? null),
+  };
+}
 
 export const runtime = 'nodejs';
 
@@ -20,7 +29,7 @@ export async function GET(_req: Request, { params }: Ctx) {
     if (!post) {
       return NextResponse.json({ error: 'Post not found' }, { status: 404 });
     }
-    return NextResponse.json(post);
+    return NextResponse.json(toPostWire(post));
   } catch (err) {
     return handleRouteError(err);
   }

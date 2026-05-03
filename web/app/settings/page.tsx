@@ -130,8 +130,16 @@ export default function SettingsPage() {
   async function disconnectFacebook() {
     setBusy(true);
     try {
-      await apiPost('/api/settings/disconnect', {});
-      toast.success('פייסבוק נותק');
+      // The disconnect flow lives on the Worker — the SaaS API can't terminate
+      // the FB session directly. Send a best-effort POST and treat 404 as
+      // "endpoint not yet wired" so the UX stays responsive.
+      try {
+        await apiPost('/api/settings/disconnect', {});
+      } catch (e: any) {
+        const msg = e instanceof Error ? e.message : '';
+        if (!/404/.test(msg)) throw e;
+      }
+      toast.success('פייסבוק נותק. ייתכן שתצטרך/י להפעיל מחדש את הסוכן.');
       setDisconnectOpen(false);
       await load();
     } catch (e: any) {

@@ -10,7 +10,18 @@ import {
   getUserId,
   handleRouteError,
   HttpError,
+  toSnake,
 } from '../_lib/route-helpers';
+
+// UI reads `g.active === 1`, so we coerce the boolean → 0/1 at the wire
+// boundary. All other Drizzle camelCase keys go through `toSnake` first.
+function toGroupWire(g: Record<string, unknown>): Record<string, unknown> {
+  const snake = toSnake<Record<string, unknown>>(g);
+  return {
+    ...snake,
+    active: snake.active ? 1 : 0,
+  };
+}
 
 export const runtime = 'nodejs';
 
@@ -40,7 +51,7 @@ export async function GET(req: NextRequest) {
       ['1', 'true', 'yes'].includes(activeParam.toLowerCase());
 
     const groups = await listGroupsForUser(userId, { tag, activeOnly });
-    return NextResponse.json(groups);
+    return NextResponse.json(groups.map(toGroupWire));
   } catch (err) {
     return handleRouteError(err);
   }
@@ -63,7 +74,7 @@ export async function POST(req: NextRequest) {
         name: body.name ?? null,
         tag: body.tag ?? null,
       });
-      return NextResponse.json(group, { status: 201 });
+      return NextResponse.json(toGroupWire(group), { status: 201 });
     } catch (e) {
       // Postgres unique-violation surfaces with code '23505' on the underlying
       // error. Drizzle re-throws it as-is on `postgres-js`.

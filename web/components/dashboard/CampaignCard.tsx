@@ -8,12 +8,12 @@ import { Tooltip } from '@/components/ui/Tooltip';
 import { Play, Pause, ExternalLink, Loader } from '@/lib/icons';
 import { cn } from '@/lib/cn';
 import { statusLabel } from '@/lib/format';
-import type { Campaign } from '@/lib/types';
+import type { Campaign, ID } from '@/lib/types';
 
 export interface CampaignCardProps {
   campaign: Campaign & { total_jobs: number; done_jobs: number; current_group?: string | null };
-  onPause?: (id: number) => void | Promise<void>;
-  onResume?: (id: number) => void | Promise<void>;
+  onPause?: (id: ID) => void | Promise<void>;
+  onResume?: (id: ID) => void | Promise<void>;
   busy?: boolean;
   className?: string;
 }

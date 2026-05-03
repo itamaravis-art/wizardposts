@@ -18,6 +18,7 @@ import {
   getUserId,
   handleRouteError,
   HttpError,
+  toSnake,
 } from '../_lib/route-helpers';
 
 export const runtime = 'nodejs';
@@ -122,11 +123,15 @@ export async function GET() {
       progressByCampaign.set(r.campaignId, cur);
     }
 
+    // The dashboard / campaigns pages read `c.started_at`, `c.created_at`,
+    // `c.last_error`, `c.daily_cap`, etc. — full snake_case. Drizzle gives us
+    // camelCase, so convert at the wire boundary.
     const enriched = campaigns.map((c) => {
       const p = progressByCampaign.get(c.id) ?? { total: 0, done: 0, success: 0, failed: 0, pending: 0 };
       const post = postMap.get(c.postId);
+      const snakeC = toSnake<Record<string, unknown>>(c);
       return {
-        ...c,
+        ...snakeC,
         post: post
           ? { id: post.id, text: post.text, imageUrl: post.imageUrl, image_path: post.imageUrl }
           : null,
@@ -202,7 +207,7 @@ export async function POST(req: NextRequest) {
 
     await bulkCreateJobsForUser(userId, campaign.id, uniqueGroupIds);
 
-    return NextResponse.json(campaign, { status: 201 });
+    return NextResponse.json(toSnake(campaign), { status: 201 });
   } catch (err) {
     return handleRouteError(err);
   }

@@ -15,6 +15,33 @@ import {
 } from '@/lib/db/queries/workerTokens';
 import { getUserId, handleRouteError } from '../_lib/route-helpers';
 
+// Wire shape used by the /worker page. Note: DB column is `last_seen_at`
+// (set on every authenticated worker request) but the UI calls it
+// `last_used_at` — keep the public name stable while mapping under the hood.
+function toTokenWire(
+  t: {
+    id: string;
+    name: string;
+    createdAt: Date;
+    lastSeenAt: Date | null;
+    revokedAt: Date | null;
+  },
+): {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+} {
+  return {
+    id: t.id,
+    name: t.name,
+    created_at: t.createdAt.toISOString(),
+    last_used_at: t.lastSeenAt ? t.lastSeenAt.toISOString() : null,
+    revoked_at: t.revokedAt ? t.revokedAt.toISOString() : null,
+  };
+}
+
 export const runtime = 'nodejs';
 
 const createSchema = z.object({
@@ -26,7 +53,7 @@ export async function GET() {
   try {
     const userId = await getUserId();
     const tokens = await listWorkerTokensForUser(userId);
-    return NextResponse.json(tokens);
+    return NextResponse.json(tokens.map(toTokenWire));
   } catch (err) {
     return handleRouteError(err);
   }
@@ -51,7 +78,7 @@ export async function POST(req: NextRequest) {
       {
         id: created.id,
         name: created.name,
-        createdAt: created.createdAt,
+        created_at: created.createdAt.toISOString(),
         // Plain token — shown ONCE, never persisted in plaintext, never returned again.
         token: plain,
       },

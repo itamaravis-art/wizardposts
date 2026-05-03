@@ -54,6 +54,21 @@ async function runJob(jobPayload: JobPayload, settings: WorkerSettings): Promise
   const { job, campaign, post, group } = jobPayload;
   let imagePath: string | null = null;
 
+  // Reject un-runnable jobs early — a related row was deleted server-side
+  // between insert and claim. Reporting failure lets the cloud move on rather
+  // than re-queuing forever.
+  if (!post || !group) {
+    const missing = [!post && 'post', !group && 'group'].filter(Boolean).join(', ');
+    logger.warn({ jobId: job.id, missing }, 'main-loop: job has missing related rows, marking failed');
+    await reportResult(job.id, {
+      success: false,
+      message: `Job has missing related rows: ${missing}`,
+    }).catch((err) =>
+      logger.error({ err, jobId: job.id }, 'main-loop: failed to report missing-rows failure'),
+    );
+    return;
+  }
+
   try {
     const browserCtx = await ensureBrowser();
     const page = await getOrCreatePage(browserCtx);
@@ -91,7 +106,7 @@ async function runJob(jobPayload: JobPayload, settings: WorkerSettings): Promise
       groupUrl: group.url,
       text: post.text,
       imagePath,
-      spinVariations: campaign.text_variations,
+      spinVariations: campaign?.text_variations ?? false,
       typingMinMs: settings.typing_min_ms,
       typingMaxMs: settings.typing_max_ms,
       screenshotDir: SCREENSHOTS_DIR,
@@ -153,7 +168,11 @@ export async function startMainLoop(): Promise<void> {
       }
 
       logger.info(
-        { jobId: job.job.id, campaignId: job.campaign.id, groupUrl: job.group.url },
+        {
+          jobId: job.job.id,
+          campaignId: job.campaign?.id ?? null,
+          groupUrl: job.group?.url ?? null,
+        },
         'main-loop: processing job',
       );
       await runJob(job, hb.settings);

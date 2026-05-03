@@ -22,35 +22,60 @@ import {
 
 export const runtime = 'nodejs';
 
-const createSchema = z.object({
-  name: z.string().min(1).max(200),
-  postId: z.string().uuid(),
-  groupIds: z.array(z.string().uuid()).min(1).max(2000),
-  dailyCap: z.number().int().positive().max(100).optional(),
-  // Safety floor: 60_000 ms (1 minute). Below that FB detects botting almost instantly.
-  minDelayMs: z
-    .number()
-    .int()
-    .min(60_000, 'minDelayMs must be at least 60000 (1 minute)')
-    .optional(),
-  maxDelayMs: z
-    .number()
-    .int()
-    .min(60_000, 'maxDelayMs must be at least 60000 (1 minute)')
-    .optional(),
-  workHoursStart: z.number().int().min(0).max(23).optional(),
-  workHoursEnd: z.number().int().min(0).max(24).optional(),
-  textVariations: z.boolean().optional(),
-  // ISO 8601. Reject past dates (>1 minute ago).
-  scheduledStartAt: z
-    .string()
-    .datetime({ offset: true })
-    .refine((s) => new Date(s).getTime() > Date.now() - 60_000, {
-      message: 'scheduledStartAt must be in the future',
-    })
-    .nullable()
-    .optional(),
-});
+// Accept BOTH camelCase and snake_case field names (UI sends snake_case to
+// match the rest of the app; API was originally written camelCase). Pre-process
+// to normalise before validation so neither side has to care.
+const createSchema = z.preprocess(
+  (raw) => {
+    if (typeof raw !== 'object' || raw === null) return raw;
+    const r = raw as Record<string, unknown>;
+    const norm = (...keys: string[]) => {
+      for (const k of keys) if (r[k] !== undefined) return r[k];
+      return undefined;
+    };
+    return {
+      name: r.name,
+      postId: norm('postId', 'post_id'),
+      groupIds: norm('groupIds', 'group_ids'),
+      dailyCap: norm('dailyCap', 'daily_cap'),
+      minDelayMs: norm('minDelayMs', 'min_delay_ms'),
+      maxDelayMs: norm('maxDelayMs', 'max_delay_ms'),
+      workHoursStart: norm('workHoursStart', 'work_hours_start'),
+      workHoursEnd: norm('workHoursEnd', 'work_hours_end'),
+      textVariations: norm('textVariations', 'text_variations'),
+      scheduledStartAt: norm('scheduledStartAt', 'scheduled_start_at'),
+    };
+  },
+  z.object({
+    name: z.string().min(1).max(200),
+    postId: z.string().uuid(),
+    groupIds: z.array(z.string().uuid()).min(1).max(2000),
+    dailyCap: z.number().int().positive().max(100).optional(),
+    // Safety floor: 60_000 ms (1 minute). Below that FB detects botting almost instantly.
+    minDelayMs: z
+      .number()
+      .int()
+      .min(60_000, 'minDelayMs must be at least 60000 (1 minute)')
+      .optional(),
+    maxDelayMs: z
+      .number()
+      .int()
+      .min(60_000, 'maxDelayMs must be at least 60000 (1 minute)')
+      .optional(),
+    workHoursStart: z.number().int().min(0).max(23).optional(),
+    workHoursEnd: z.number().int().min(0).max(24).optional(),
+    textVariations: z.boolean().optional(),
+    // ISO 8601. Reject past dates (>1 minute ago).
+    scheduledStartAt: z
+      .string()
+      .datetime({ offset: true })
+      .refine((s) => new Date(s).getTime() > Date.now() - 60_000, {
+        message: 'scheduledStartAt must be in the future',
+      })
+      .nullable()
+      .optional(),
+  }),
+);
 
 // GET /api/campaigns — all campaigns for current user, with progress + post.
 export async function GET() {

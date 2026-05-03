@@ -26,8 +26,12 @@ const client =
   g.__pgClient ??
   postgres(connectionString, {
     ssl: 'require',
-    prepare: true,
-    max: 10,
+    // Transaction pooler (port 6543) does NOT support prepared statements.
+    prepare: false,
+    // Keep pool small per-instance — Vercel can spin up many concurrent fns.
+    max: 1,
+    idle_timeout: 20,
+    max_lifetime: 60 * 30,
   });
 
 if (process.env.NODE_ENV !== 'production') {

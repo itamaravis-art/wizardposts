@@ -20,16 +20,15 @@ export async function claimNextJobForUser(
   userId: string,
   workerTokenId: string,
 ): Promise<Job | null> {
-  const now = new Date();
-
-  // Build the inner SELECT as raw SQL because Drizzle's query builder doesn't
-  // expose FOR UPDATE SKIP LOCKED on subqueries directly.
-  const rows = await db.execute<Job>(sql`
+  // Use Postgres now() rather than passing a JS Date — Drizzle's sql tag
+  // doesn't always serialise Date correctly across drivers (we hit
+  // "ERR_INVALID_ARG_TYPE: Received an instance of Date" on Vercel + postgres-js).
+  const result = await db.execute<Job>(sql`
     UPDATE ${jobs}
     SET
       status = 'running',
       attempts = ${jobs.attempts} + 1,
-      started_at = ${now},
+      started_at = now(),
       claimed_by_token = ${workerTokenId}
     WHERE id = (
       SELECT j.id
@@ -38,7 +37,7 @@ export async function claimNextJobForUser(
       WHERE c.user_id = ${userId}
         AND c.status = 'running'
         AND j.status = 'pending'
-        AND (j.scheduled_at IS NULL OR j.scheduled_at <= ${now})
+        AND (j.scheduled_at IS NULL OR j.scheduled_at <= now())
       ORDER BY j.scheduled_at NULLS FIRST, j.id
       FOR UPDATE SKIP LOCKED
       LIMIT 1
@@ -46,9 +45,9 @@ export async function claimNextJobForUser(
     RETURNING *;
   `);
 
-  // postgres-js returns an array-like result.
-  const row = (rows as unknown as Job[])[0];
-  return row ?? null;
+  // db.execute returns either an array (postgres-js) or {rows: [...]} (others).
+  const arr = (Array.isArray(result) ? result : (result as { rows?: Job[] }).rows) ?? [];
+  return arr[0] ?? null;
 }
 
 export async function markJobSuccess(

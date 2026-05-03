@@ -31,15 +31,36 @@ export async function GET() {
   }
 }
 
-// POST /api/posts — create a post. Image (if any) must already be uploaded.
+// POST /api/posts — create a post. Accepts EITHER:
+//   1. application/json: { text, imageUrl? }
+//   2. multipart/form-data: text + optional image file (uploaded inline)
 export async function POST(req: NextRequest) {
   try {
     const userId = await getUserId();
-    const body = createSchema.parse(await req.json());
-    const post = await createPostForUser(userId, {
-      text: body.text,
-      imageUrl: body.imageUrl ?? null,
-    });
+    const contentType = req.headers.get('content-type') || '';
+
+    let text: string;
+    let imageUrl: string | null = null;
+
+    if (contentType.includes('multipart/form-data')) {
+      const fd = await req.formData();
+      const t = fd.get('text');
+      if (typeof t !== 'string') {
+        return NextResponse.json({ error: 'text is required' }, { status: 400 });
+      }
+      text = t;
+      const image = fd.get('image');
+      if (image && image instanceof File && image.size > 0) {
+        const { uploadImage } = await import('@/lib/storage');
+        imageUrl = await uploadImage(userId, image, image.name || 'image.jpg');
+      }
+    } else {
+      const body = createSchema.parse(await req.json());
+      text = body.text;
+      imageUrl = body.imageUrl ?? null;
+    }
+
+    const post = await createPostForUser(userId, { text, imageUrl });
     return NextResponse.json(post, { status: 201 });
   } catch (err) {
     return handleRouteError(err);

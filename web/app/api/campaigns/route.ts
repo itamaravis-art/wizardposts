@@ -77,12 +77,66 @@ const createSchema = z.preprocess(
   }),
 );
 
-// GET /api/campaigns — all campaigns for current user, with progress + post.
+// GET /api/campaigns — all campaigns for current user, enriched with the
+// post (text + image_url) and a job-status progress summary so the UI can
+// render cards without a per-campaign extra fetch.
 export async function GET() {
   try {
     const userId = await getUserId();
     const campaigns = await listCampaignsForUser(userId);
-    return NextResponse.json(campaigns);
+
+    // Resolve posts in one shot.
+    const uniquePostIds = Array.from(new Set(campaigns.map((c) => c.postId)));
+    const postMap = new Map<string, { id: string; text: string; imageUrl: string | null }>();
+    for (const pid of uniquePostIds) {
+      const p = await getPostForUser(userId, pid);
+      if (p) {
+        postMap.set(p.id, { id: p.id, text: p.text, imageUrl: p.imageUrl ?? null });
+      }
+    }
+
+    // Per-campaign progress (single aggregated query).
+    const { db } = await import('@/lib/db');
+    const { jobs } = await import('@/lib/db/schema');
+    const { eq, sql, inArray } = await import('drizzle-orm');
+    const campaignIds = campaigns.map((c) => c.id);
+    let progressRows: Array<{ campaignId: string; status: string; n: number }> = [];
+    if (campaignIds.length > 0) {
+      progressRows = (await db
+        .select({
+          campaignId: jobs.campaignId,
+          status: jobs.status,
+          n: sql<number>`count(*)::int`,
+        })
+        .from(jobs)
+        .where(inArray(jobs.campaignId, campaignIds))
+        .groupBy(jobs.campaignId, jobs.status)) as typeof progressRows;
+    }
+    const progressByCampaign = new Map<string, { total: number; done: number; success: number; failed: number; pending: number }>();
+    for (const r of progressRows) {
+      const cur = progressByCampaign.get(r.campaignId) ?? { total: 0, done: 0, success: 0, failed: 0, pending: 0 };
+      cur.total += r.n;
+      if (r.status === 'success') { cur.success += r.n; cur.done += r.n; }
+      else if (r.status === 'failed') { cur.failed += r.n; cur.done += r.n; }
+      else if (r.status === 'pending') { cur.pending += r.n; }
+      progressByCampaign.set(r.campaignId, cur);
+    }
+
+    const enriched = campaigns.map((c) => {
+      const p = progressByCampaign.get(c.id) ?? { total: 0, done: 0, success: 0, failed: 0, pending: 0 };
+      const post = postMap.get(c.postId);
+      return {
+        ...c,
+        post: post
+          ? { id: post.id, text: post.text, imageUrl: post.imageUrl, image_path: post.imageUrl }
+          : null,
+        progress: p,
+        total_jobs: p.total,
+        done_jobs: p.done,
+      };
+    });
+
+    return NextResponse.json(enriched);
   } catch (err) {
     return handleRouteError(err);
   }

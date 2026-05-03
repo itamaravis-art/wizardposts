@@ -1,0 +1,12 @@
+2026/05/03-16:32:24.209 7ca0 Reusing MANIFEST C:\Users\itama\FACEBOOKPOST\data\session\Default\IndexedDB\https_www.facebook.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/05/03-16:32:24.217 7ca0 Recovering log #7
+2026/05/03-16:32:24.247 7ca0 Reusing old log C:\Users\itama\FACEBOOKPOST\data\session\Default\IndexedDB\https_www.facebook.com_0.indexeddb.leveldb/000007.log 
+2026/05/03-17:42:09.288 7d7c Level-0 table #12: started
+2026/05/03-17:42:09.329 7d7c Level-0 table #12: 1636516 bytes OK
+2026/05/03-17:42:09.332 7d7c Delete type=0 #7
+2026/05/03-17:42:11.003 7d7c Compacting 1@1 + 1@2 files
+2026/05/03-17:42:11.033 7d7c Generated table #13@1: 3336 keys, 177377 bytes
+2026/05/03-17:42:11.033 7d7c Compacted 1@1 + 1@2 files => 177377 bytes
+2026/05/03-17:42:11.035 7d7c compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/05/03-17:42:11.035 7d7c Delete type=2 #9
+2026/05/03-17:42:11.036 7d7c Delete type=2 #12

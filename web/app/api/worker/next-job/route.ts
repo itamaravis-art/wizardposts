@@ -26,6 +26,11 @@ import { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { requireWorker } from '@/lib/auth/worker-auth';
 import { claimNextJobForUser } from '@/lib/db/queries/jobs';
+import { getCampaign } from '@/lib/db/queries/campaigns';
+import { getPostForUser } from '@/lib/db/queries/posts';
+import { db } from '@/lib/db';
+import { groups } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
 import { handleRouteError } from '../../_lib/route-helpers';
 
 export const runtime = 'nodejs';
@@ -38,8 +43,47 @@ export async function GET(req: NextRequest) {
       // 204 No Content — the worker should sleep and retry.
       return new Response(null, { status: 204 });
     }
-    // Expected shape: { job, campaign, post (with text + image_url), group }
-    return NextResponse.json(claimed);
+
+    // Enrich with campaign + post + group so the worker can post without
+    // additional round-trips. Worker expects: { job, campaign, post, group }.
+    const campaign = await getCampaign(claimed.campaignId, userId);
+    const post = campaign ? await getPostForUser(userId, campaign.postId) : null;
+    const [group] = await db
+      .select()
+      .from(groups)
+      .where(eq(groups.id, claimed.groupId))
+      .limit(1);
+
+    return NextResponse.json({
+      job: {
+        id: claimed.id,
+        attempts: claimed.attempts,
+        status: claimed.status,
+      },
+      campaign: campaign
+        ? {
+            id: campaign.id,
+            name: campaign.name,
+            min_delay_ms: campaign.minDelayMs,
+            max_delay_ms: campaign.maxDelayMs,
+            text_variations: campaign.textVariations,
+          }
+        : null,
+      post: post
+        ? {
+            id: post.id,
+            text: post.text,
+            image_url: post.imageUrl,
+          }
+        : null,
+      group: group
+        ? {
+            id: group.id,
+            url: group.url,
+            name: group.name,
+          }
+        : null,
+    });
   } catch (err) {
     return handleRouteError(err);
   }

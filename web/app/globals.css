@@ -1,0 +1,232 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =========================================================================
+   Design tokens — light & dark
+   ========================================================================= */
+@layer base {
+  :root {
+    /* Surfaces / structure (HSL components, no hsl() wrapper) */
+    --bg: 210 40% 98%;
+    --surface: 0 0% 100%;
+    --surface-2: 210 40% 96%;
+    --border: 214 32% 91%;
+    --border-strong: 215 20% 80%;
+    --foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+
+    /* Brand alias */
+    --brand: 217 91% 60%;
+    --brand-foreground: 0 0% 100%;
+    --ring: 217 91% 60%;
+
+    /* Status */
+    --success: 142 71% 45%;
+    --warning: 38 92% 50%;
+    --danger: 0 84% 60%;
+    --info: 199 89% 48%;
+  }
+
+  .dark {
+    --bg: 222 47% 8%;
+    --surface: 222 40% 11%;
+    --surface-2: 220 30% 15%;
+    --border: 220 20% 22%;
+    --border-strong: 220 18% 32%;
+    --foreground: 210 40% 98%;
+    --muted: 220 30% 15%;
+    --muted-foreground: 215 16% 65%;
+    --brand: 217 91% 65%;
+    --ring: 217 91% 65%;
+  }
+
+  * {
+    box-sizing: border-box;
+    border-color: hsl(var(--border));
+  }
+
+  html,
+  body {
+    background-color: hsl(var(--bg));
+    color: hsl(var(--foreground));
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    line-height: 1.55;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    letter-spacing: -0.015em;
+    line-height: 1.25;
+    font-weight: 600;
+  }
+
+  h1 {
+    font-size: 1.75rem;
+    letter-spacing: -0.02em;
+  }
+  h2 {
+    font-size: 1.375rem;
+  }
+  h3 {
+    font-size: 1.125rem;
+  }
+
+  /* Focus rings — keyboard only */
+  :where(button, a, input, textarea, select, [role='button'], [tabindex]):focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  ::selection {
+    background: hsl(var(--brand) / 0.25);
+    color: hsl(var(--foreground));
+  }
+}
+
+/* =========================================================================
+   Scrollbar
+   ========================================================================= */
+@layer base {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border-strong) / 0.6);
+    border-radius: 8px;
+    border: 2px solid hsl(var(--bg));
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--border-strong));
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    border: none;
+  }
+}
+
+/* =========================================================================
+   Utilities
+   ========================================================================= */
+@layer utilities {
+  .surface {
+    background-color: hsl(var(--surface));
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.875rem;
+    box-shadow:
+      0 1px 2px 0 hsl(220 40% 10% / 0.04),
+      0 1px 3px 0 hsl(220 40% 10% / 0.06);
+  }
+
+  .glass {
+    background: hsl(var(--surface) / 0.72);
+    backdrop-filter: saturate(180%) blur(12px);
+    -webkit-backdrop-filter: saturate(180%) blur(12px);
+    border: 1px solid hsl(var(--border) / 0.7);
+  }
+
+  .gradient-brand {
+    background-image: linear-gradient(
+      135deg,
+      hsl(217 91% 60%) 0%,
+      hsl(224 76% 48%) 100%
+    );
+  }
+
+  .gradient-text {
+    background: linear-gradient(135deg, hsl(217 91% 60%), hsl(199 89% 48%));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .skeleton-shimmer {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--muted)) 0%,
+      hsl(var(--surface-2)) 50%,
+      hsl(var(--muted)) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s linear infinite;
+  }
+
+  /* RTL helpers */
+  [dir='rtl'] .ltr-text {
+    direction: ltr;
+    text-align: left;
+    unicode-bidi: embed;
+  }
+}
+
+/* =========================================================================
+   Legacy class shims — keep older pages working until migrated
+   ========================================================================= */
+@layer components {
+  .card {
+    @apply bg-white border border-slate-200 rounded-xl p-4 shadow-card dark:bg-surface dark:border-border;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium transition-all text-sm;
+  }
+  .btn-primary {
+    @apply bg-brand-600 text-white hover:bg-brand-700 disabled:bg-slate-300 disabled:cursor-not-allowed;
+  }
+  .btn-secondary {
+    @apply bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 dark:bg-surface dark:border-border dark:text-foreground dark:hover:bg-surface-2;
+  }
+  .btn-danger {
+    @apply bg-danger-600 text-white hover:bg-danger-700;
+  }
+  .btn-success {
+    @apply bg-success-600 text-white hover:bg-success-700;
+  }
+  .btn-warning {
+    @apply bg-warning-500 text-white hover:bg-warning-600;
+  }
+  .input {
+    @apply w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500 transition-shadow dark:bg-surface dark:border-border dark:text-foreground;
+  }
+  .label {
+    @apply block text-sm font-medium text-slate-700 mb-1 dark:text-foreground;
+  }
+
+  table.data-table {
+    @apply w-full text-sm;
+  }
+  table.data-table thead {
+    @apply bg-slate-50 sticky top-0 dark:bg-surface-2;
+  }
+  table.data-table th {
+    @apply text-right px-3 py-2.5 font-semibold text-slate-700 border-b border-slate-200 dark:text-foreground dark:border-border;
+  }
+  table.data-table td {
+    @apply px-3 py-2.5 border-b border-slate-100 dark:border-border;
+  }
+  table.data-table tbody tr:nth-child(even) {
+    @apply bg-slate-50/50 dark:bg-surface-2/40;
+  }
+  table.data-table tbody tr:hover {
+    @apply bg-brand-50/40 dark:bg-brand-950/20;
+  }
+}

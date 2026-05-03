@@ -1,0 +1,14 @@
+{
+  "name": "wizardposts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-tenant Facebook group auto-posting SaaS",
+  "workspaces": ["web", "worker"],
+  "scripts": {
+    "dev:web": "npm --workspace web run dev",
+    "dev:worker": "npm --workspace worker run dev",
+    "build:web": "npm --workspace web run build",
+    "db:push": "npm --workspace web run db:push",
+    "db:studio": "npm --workspace web run db:studio"
+  }
+}

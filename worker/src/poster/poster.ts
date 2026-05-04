@@ -81,13 +81,15 @@ async function findFirstVisible(
   return null;
 }
 
-async function findComposerTrigger(page: Page): Promise<Locator | null> {
-  // Wait for the group page to settle and scroll a bit so the composer area
-  // enters the viewport (FB lazy-renders below the fold).
+async function findComposerTrigger(page: Page, jobId?: string): Promise<Locator | null> {
+  // FB's group feed React tree settles slowly: domcontentloaded fires long
+  // before the inline composer mounts. Give networkidle more headroom and
+  // a hydration buffer before any selectors run.
   try {
-    await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
-    await page.evaluate(() => window.scrollTo(0, 400));
-    await page.waitForTimeout(1500);
+    await page.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
+    await page.waitForTimeout(2500);
+    await page.evaluate(() => window.scrollTo(0, 200));
+    await page.waitForTimeout(1200);
   } catch {
     /* ignore */
   }
@@ -148,7 +150,86 @@ async function findComposerTrigger(page: Page): Promise<Locator | null> {
     /* ignore */
   }
 
+  // Strategy 5 — broader keyword scan, scoped + size-filtered.
+  //
+  // FB sometimes ships a composer trigger whose only accessible name is an
+  // aria-label we haven't enumerated (icon-only buttons, A/B test variants,
+  // future copy changes). Rather than enumerate every possible phrase, we:
+  //   1. Look only inside containers where the composer normally lives
+  //      (data-pagelet*="GroupFeed" / "composer" / role=main).
+  //   2. Walk the visible role=button elements that have an aria-label.
+  //   3. Filter to ones whose label contains a generic compose keyword
+  //      AND whose bounding box is wide (>200px) and near the top of the
+  //      page (y < 1000) — composer triggers are big and high; comment
+  //      reply buttons further down the feed are narrow and low.
+  // This avoids false-positives on "כתוב תגובה" / "ערוך פוסט" / etc.
+  const broadHebrew = /כתוב|כתבו|כתיבת|פרסם|שתף|חולק|פוסט/;
+  const broadEnglish = /\b(write|post|share|create)\b/i;
+  const containerSelectors = [
+    '[data-pagelet*="GroupFeed" i]',
+    '[data-pagelet*="GroupInlineComposer" i]',
+    '[data-pagelet*="composer" i]',
+    '[role="main"]',
+  ];
+  for (const containerSel of containerSelectors) {
+    const container = page.locator(containerSel).first();
+    if (!(await container.isVisible({ timeout: 500 }).catch(() => false))) continue;
+    const candidates = await container.locator('[role="button"][aria-label]').all().catch(() => []);
+    for (const c of candidates.slice(0, 30)) {
+      const aria = (await c.getAttribute('aria-label').catch(() => null)) || '';
+      if (!aria) continue;
+      if (!broadHebrew.test(aria) && !broadEnglish.test(aria)) continue;
+      if (!(await c.isVisible({ timeout: 200 }).catch(() => false))) continue;
+      const box = await c.boundingBox().catch(() => null);
+      if (!box) continue;
+      // Composer triggers are wide and live near the top of the feed.
+      if (box.width < 200 || box.y > 1000) continue;
+      logger.info(
+        { jobId, ariaLabel: aria.slice(0, 120), x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width) },
+        'poster: composer matched via Strategy 5 (broad keyword + position)',
+      );
+      return c;
+    }
+  }
+
+  // All strategies failed — emit a diagnostic dump so the next iteration of
+  // selectors can be informed by what's actually on the page.
+  await dumpButtonAriaLabels(page, jobId);
   return null;
+}
+
+/**
+ * Diagnostic helper: log up to 30 visible role=button aria-labels with their
+ * positions, to help narrow down the next composer-selector iteration.
+ *
+ * Best-effort: any failure here is swallowed (this runs on the failure path
+ * already, we don't want it to mask the real error).
+ */
+async function dumpButtonAriaLabels(page: Page, jobId?: string): Promise<void> {
+  try {
+    const all = await page.locator('[role="button"][aria-label]').all().catch(() => []);
+    const sample: Array<{ label: string; x: number; y: number; w: number; visible: boolean }> = [];
+    for (const btn of all.slice(0, 80)) {
+      if (sample.length >= 30) break;
+      const aria = (await btn.getAttribute('aria-label').catch(() => null)) || '';
+      if (!aria) continue;
+      const visible = await btn.isVisible({ timeout: 80 }).catch(() => false);
+      const box = visible ? await btn.boundingBox().catch(() => null) : null;
+      sample.push({
+        label: aria.slice(0, 80),
+        x: box ? Math.round(box.x) : -1,
+        y: box ? Math.round(box.y) : -1,
+        w: box ? Math.round(box.width) : -1,
+        visible,
+      });
+    }
+    logger.warn(
+      { jobId, sampleCount: sample.length, sampleAriaLabels: sample },
+      'poster: composer trigger not found — sample of page buttons (use this to extend selectors)',
+    );
+  } catch {
+    /* swallow — diagnostic only */
+  }
 }
 
 async function findComposerTextbox(scope: Locator | Page): Promise<Locator | null> {
@@ -285,7 +366,7 @@ export async function postToGroup(opts: PostToGroupOpts): Promise<PostToGroupRes
     await humanScroll(page, { steps: 2 });
     await readingPause(1000, 2500);
 
-    const trigger = await findComposerTrigger(page);
+    const trigger = await findComposerTrigger(page, jobId);
     if (!trigger) {
       const screenshotPath = await safeScreenshot(page, screenshotDir, jobId, 'fail');
       const msg = 'Composer trigger not found (FB DOM may have changed)';

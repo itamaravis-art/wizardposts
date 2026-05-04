@@ -17,7 +17,11 @@ export async function launchBrowser(): Promise<BrowserContext> {
     headless,
     locale,
     timezoneId,
-    viewport: { width: 1280, height: 800 },
+    // 1440x900 matches a typical modern laptop and gives Facebook's React layout
+    // enough horizontal space to render the desktop composer trigger; at 1280px
+    // wide some Hebrew RTL group views collapse the inline composer area, hiding
+    // the trigger button entirely.
+    viewport: { width: 1440, height: 900 },
     userAgent,
     args: [
       '--disable-blink-features=AutomationControlled',

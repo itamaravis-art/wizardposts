@@ -21,6 +21,13 @@ export interface PostToGroupOpts {
   typingMaxMs: number;
   screenshotDir: string;
   jobId: string;
+  /**
+   * Per-group shortlink replacement map { parent_url: child_url }.
+   * When present, every parent_url found in the post text is replaced
+   * with the corresponding child_url before typing — this is how the
+   * cloud's dashboard knows which group brought a click.
+   */
+  shortlinks?: Record<string, string>;
 }
 
 /**
@@ -769,7 +776,27 @@ export async function postToGroup(opts: PostToGroupOpts): Promise<PostToGroupRes
     return { success: false, message, screenshotPath: null, kind: 'network_error' };
   }
 
-  const text = spinVariations ? spinText(opts.text) : opts.text;
+  // Apply spinner first (so a {a|b} variation doesn't accidentally produce
+  // a parent_url string we wouldn't otherwise replace), then swap parent
+  // shortlinks for their group-specific children. If neither feature is
+  // configured this is a no-op.
+  let text = spinVariations ? spinText(opts.text) : opts.text;
+  if (opts.shortlinks) {
+    let replacements = 0;
+    for (const [parentUrl, childUrl] of Object.entries(opts.shortlinks)) {
+      if (!parentUrl || !childUrl || parentUrl === childUrl) continue;
+      if (text.includes(parentUrl)) {
+        text = text.split(parentUrl).join(childUrl);
+        replacements += 1;
+      }
+    }
+    if (replacements > 0) {
+      logger.info(
+        { jobId, replacements },
+        'poster: swapped parent shortlinks for group-specific children',
+      );
+    }
+  }
 
   try {
     logger.info({ jobId, groupUrl }, 'poster: navigating to group');

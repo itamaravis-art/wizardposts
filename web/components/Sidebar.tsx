@@ -12,6 +12,7 @@ import {
   Logs,
   Settings,
   FacebookConnect,
+  Link2,
 } from '@/lib/icons';
 import { cn } from '@/lib/cn';
 import { Avatar } from '@/components/ui/Avatar';
@@ -34,6 +35,7 @@ const NAV: NavItem[] = [
   { href: '/posts', label: 'פוסטים', icon: Send },
   { href: '/groups', label: 'קבוצות', icon: Users },
   { href: '/campaigns', label: 'קמפיינים', icon: Calendar },
+  { href: '/shortlinks', label: 'קישורים מקוצרים', icon: Link2 },
   { href: '/logs', label: 'יומן', icon: Logs },
   { href: '/settings', label: 'הגדרות', icon: Settings },
   { href: '/connect', label: 'חיבור פייסבוק', icon: FacebookConnect },

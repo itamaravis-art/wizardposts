@@ -151,6 +151,7 @@ async function runJob(jobPayload: JobPayload, settings: WorkerSettings): Promise
       typingMaxMs: settings.typing_max_ms,
       screenshotDir: SCREENSHOTS_DIR,
       jobId: job.id,
+      shortlinks: jobPayload.shortlinks ?? {},
     });
 
     // Iter6 — verbose tracing on the screenshot upload pipeline because

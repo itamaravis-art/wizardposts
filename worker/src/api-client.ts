@@ -71,6 +71,19 @@ export interface JobPayload {
     url: string;
     name: string | null;
   } | null;
+  /**
+   * Per-group shortlink replacement map: { parent_url: child_url }.
+   *
+   * The cloud pre-generates child shortlinks for every (post × group)
+   * pair where the post text contains one of the user's parent
+   * shortlinks. The worker swaps `parent_url` for `child_url` in the
+   * post text before typing, which is what gives us per-group click
+   * attribution in the dashboard.
+   *
+   * Empty object when the post has no shortlinks. Missing field on
+   * older clouds — treat as empty.
+   */
+  shortlinks?: Record<string, string>;
 }
 
 export interface ReportResultPayload {

@@ -348,6 +348,83 @@ export type NewCampaign = typeof campaigns.$inferInsert;
 export type Job = typeof jobs.$inferSelect;
 export type NewJob = typeof jobs.$inferInsert;
 
+/* ------------------------------------------------------------------ */
+/* Shortlinks — branded URL shortener with per-(post×group) attribution. */
+/*                                                                     */
+/* Two roles for a row:                                                */
+/*   - PARENT: created by a user via /shortlinks/new. Stable slug      */
+/*     they paste into post text. parent_id IS NULL, group_id IS NULL. */
+/*   - CHILD: auto-created when a campaign starts and the post text    */
+/*     contains a parent shortlink. One child per (parent × group).    */
+/*     parent_id and group_id are set; slug is auto-generated.         */
+/*                                                                     */
+/* The redirect endpoint /l/<slug> resolves either form by slug. Click */
+/* attribution per group works because the worker text-replaces        */
+/* parent URLs with group-specific child URLs at posting time.         */
+/* ------------------------------------------------------------------ */
+
+export const shortlinks = pgTable(
+  'shortlinks',
+  {
+    id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    parentId: uuid('parent_id'),
+    postId: uuid('post_id').references(() => posts.id, { onDelete: 'set null' }),
+    groupId: uuid('group_id').references(() => groups.id, { onDelete: 'set null' }),
+    jobId: uuid('job_id').references(() => jobs.id, { onDelete: 'set null' }),
+    slug: text('slug').notNull().unique(),
+    targetUrl: text('target_url').notNull(),
+    label: text('label'),
+    isActive: boolean('is_active').notNull().default(true),
+    clickCount: integer('click_count').notNull().default(0),
+    botClickCount: integer('bot_click_count').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    userIdx: index('shortlinks_user_id_idx').on(t.userId),
+    parentIdx: index('shortlinks_parent_id_idx').on(t.parentId),
+    postGroupIdx: index('shortlinks_post_group_idx').on(t.postId, t.groupId),
+    activeUserIdx: index('shortlinks_user_active_idx').on(t.userId, t.isActive),
+  }),
+);
+
+export const shortlinkClicks = pgTable(
+  'shortlink_clicks',
+  {
+    id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+    shortlinkId: uuid('shortlink_id')
+      .notNull()
+      .references(() => shortlinks.id, { onDelete: 'cascade' }),
+    clickedAt: timestamp('clicked_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    // sha256(ip + daily_salt) sliced to 32 chars. Lets us count distinct
+    // visitors per day without storing actual IPs.
+    ipHash: text('ip_hash'),
+    userAgent: text('user_agent'),
+    country: text('country'),
+    deviceType: text('device_type'),
+    referrer: text('referrer'),
+    isBot: boolean('is_bot').notNull().default(false),
+  },
+  (t) => ({
+    shortlinkTimeIdx: index('shortlink_clicks_shortlink_time_idx').on(
+      t.shortlinkId,
+      t.clickedAt,
+    ),
+    timeIdx: index('shortlink_clicks_time_idx').on(t.clickedAt),
+  }),
+);
+
+export type Shortlink = typeof shortlinks.$inferSelect;
+export type NewShortlink = typeof shortlinks.$inferInsert;
+export type ShortlinkClick = typeof shortlinkClicks.$inferSelect;
+export type NewShortlinkClick = typeof shortlinkClicks.$inferInsert;
+
 export type DailyCounter = typeof dailyCounters.$inferSelect;
 export type NewDailyCounter = typeof dailyCounters.$inferInsert;
 

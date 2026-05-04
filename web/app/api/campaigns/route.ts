@@ -207,6 +207,35 @@ export async function POST(req: NextRequest) {
 
     await bulkCreateJobsForUser(userId, campaign.id, uniqueGroupIds);
 
+    // Per-(post×group) shortlinks for click attribution. If the post text
+    // contains any of this user's parent shortlinks, we pre-create child
+    // shortlinks for every group this campaign will hit. Worker swaps the
+    // parent URL for the group-specific child URL at posting time, so a
+    // click on "wzp.co/may-sale" in group A becomes "wzp.co/xK7m" — the
+    // dashboard can then show clicks-per-group attribution.
+    //
+    // Best-effort: if shortlink expansion fails (e.g. parent shortlink
+    // rows missing), we log but don't fail campaign creation. The text
+    // will go out as-is and clicks just won't be group-attributed.
+    try {
+      const { ensureChildShortlinksForGroups } = await import(
+        '@/lib/db/queries/shortlinks'
+      );
+      const { getPostForUser } = await import('@/lib/db/queries/posts');
+      const post = await getPostForUser(userId, body.postId);
+      if (post?.text) {
+        await ensureChildShortlinksForGroups(
+          userId,
+          body.postId,
+          post.text,
+          uniqueGroupIds,
+        );
+      }
+    } catch (err) {
+      // Log only — don't fail the campaign create over a tracking-side issue.
+      console.error('shortlink expansion failed:', err);
+    }
+
     return NextResponse.json(toSnake(campaign), { status: 201 });
   } catch (err) {
     return handleRouteError(err);

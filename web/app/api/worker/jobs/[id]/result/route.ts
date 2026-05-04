@@ -30,6 +30,9 @@ const bodySchema = z.object({
   // "checkpoint", "post_blocked"). The query helper uses this to decide
   // whether to pause the campaign.
   blockerKind: z.string().max(40).nullable().optional(),
+  // Worker-side classification of the failure (composer_not_found, etc.).
+  // Used to decide whether to count toward the consecutive-failure streak.
+  failureKind: z.string().max(40).nullable().optional(),
 });
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -53,6 +56,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       message: body.message ?? null,
       screenshotUrl: body.screenshotUrl ?? null,
       blockerKind: body.blockerKind ?? null,
+      failureKind: body.failureKind ?? null,
     });
 
     if (!result) {

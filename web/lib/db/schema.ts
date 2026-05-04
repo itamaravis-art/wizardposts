@@ -260,6 +260,12 @@ export const jobs = pgTable(
     claimedByToken: uuid('claimed_by_token').references(() => workerTokens.id, {
       onDelete: 'set null',
     }),
+    // Worker-side classification of why a job failed (composer_not_found,
+    // login_required, fb_blocked, network_error, etc.). Used by the auto-pause
+    // logic in countConsecutiveFailures so transient kinds don't pause a
+    // working campaign over a single DOM drift. Null on success or pre-iter5
+    // legacy rows.
+    failureKind: text('failure_kind'),
   },
   (t) => ({
     campaignIdx: index('jobs_campaign_id_idx').on(t.campaignId),

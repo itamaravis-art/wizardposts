@@ -23,6 +23,11 @@ const bodySchema = z.object({
   message: z.string().max(2000).nullable().optional(),
   screenshotUrl: z.string().url().nullable().optional(),
   blockerKind: z.string().max(40).nullable().optional(),
+  // Worker tells us *why* the job failed. The DB layer uses this to decide
+  // whether to count the failure toward the campaign auto-pause streak.
+  // String-typed (instead of enum) to be tolerant of new kinds added by
+  // newer workers — unknown values fall through as 'unknown'.
+  failureKind: z.string().max(40).nullable().optional(),
 });
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -40,6 +45,7 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
       message: body.message ?? null,
       screenshotUrl: body.screenshotUrl ?? null,
       blockerKind: body.blockerKind ?? null,
+      failureKind: body.failureKind ?? null,
     });
 
     if (!result) {

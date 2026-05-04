@@ -78,6 +78,22 @@ export interface ReportResultPayload {
   message: string;
   screenshotUrl?: string;
   blockerKind?: BlockerKind;
+  /**
+   * Why a job failed. The cloud uses this to classify the failure as
+   * transient (don't count toward campaign auto-pause) vs permanent.
+   * Worker-only; older clouds tolerate this extra field gracefully (Zod
+   * `.passthrough()` style).
+   */
+  failureKind?:
+    | 'composer_not_found'
+    | 'composer_no_textbox'
+    | 'login_required'
+    | 'group_no_permission'
+    | 'fb_blocked'
+    | 'network_error'
+    | 'image_missing'
+    | 'submit_failed'
+    | 'unknown';
 }
 
 export interface ConnectionStatusPayload {

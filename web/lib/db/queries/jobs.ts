@@ -85,15 +85,42 @@ export async function markJobFailed(
 }
 
 /**
- * Counts the number of consecutive failed jobs at the tail of the campaign's
- * finished-job timeline. Returns 0 if the most recent finished job is a
- * success. Used to break out of a doomed run after N failures in a row.
+ * Failure kinds that are technical / transient and shouldn't count toward
+ * the consecutive-failure streak that pauses the campaign.
+ *
+ * Why this matters: before iter5 a single DOM-drift on Facebook's side
+ * would pause every active campaign across all users — three "Composer
+ * trigger not found" failures in a row and the campaign was frozen until
+ * a human un-paused it. composer_not_found / network_error are bugs WE
+ * fix or transient flakes; they should not be treated like a captcha
+ * (which is a real signal that we're being detected).
+ */
+const TRANSIENT_FAILURE_KINDS = new Set([
+  'composer_not_found',
+  'composer_no_textbox',
+  'network_error',
+]);
+
+/**
+ * Counts the number of consecutive *non-transient* failed jobs at the tail
+ * of the campaign's finished-job timeline. Returns 0 if the most recent
+ * finished job is a success. Used to break out of a doomed run after N
+ * failures in a row.
+ *
+ * Transient failures (composer_not_found, network_error) are skipped — they
+ * don't reset the streak, but they don't increment it either; effectively
+ * they're treated as "didn't happen" for the auto-pause decision. A success
+ * after them clears the streak as before.
+ *
+ * Pre-iter5 rows have `failure_kind = NULL`. We treat those as
+ * non-transient (the original behaviour) so pausing logic doesn't change
+ * for legacy data.
  */
 export async function countConsecutiveFailures(
   campaignId: string,
 ): Promise<number> {
   const recent = await db
-    .select({ status: jobs.status })
+    .select({ status: jobs.status, failureKind: jobs.failureKind })
     .from(jobs)
     .where(
       and(
@@ -105,8 +132,10 @@ export async function countConsecutiveFailures(
 
   let streak = 0;
   for (const r of recent) {
-    if (r.status === 'failed') streak += 1;
-    else break;
+    if (r.status === 'success') break;
+    // Transient failures: skip — neither break the streak nor extend it.
+    if (r.failureKind && TRANSIENT_FAILURE_KINDS.has(r.failureKind)) continue;
+    streak += 1;
   }
   return streak;
 }
@@ -161,6 +190,12 @@ export interface RecordJobResultInput {
   message?: string | null;
   screenshotUrl?: string | null;
   blockerKind?: string | null;
+  /**
+   * Worker-side classification of the failure (composer_not_found,
+   * fb_blocked, etc.). Persisted on the job row so countConsecutiveFailures
+   * can tell transient kinds from real ones for the auto-pause decision.
+   */
+  failureKind?: string | null;
 }
 
 /**
@@ -226,6 +261,7 @@ export async function recordJobResultForUser(
       finishedAt: now,
       resultMessage: message,
       screenshotPath: input.screenshotUrl ?? null,
+      failureKind: input.failureKind ?? null,
     })
     .where(eq(jobs.id, input.jobId))
     .returning();

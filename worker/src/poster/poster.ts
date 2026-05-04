@@ -23,11 +23,43 @@ export interface PostToGroupOpts {
   jobId: string;
 }
 
+/**
+ * Why a job failed. Used by the cloud to decide whether to count the failure
+ * toward `max_consecutive_fails` (campaign auto-pause) and by the worker to
+ * decide cooldown duration. Transient kinds (composer_not_found, network)
+ * recover on their own once the underlying flake clears; permanent kinds
+ * (login_required, fb_blocked) need human attention.
+ */
+export type FailureKind =
+  | 'composer_not_found'   // selectors didn't catch the trigger — DOM drift
+  | 'composer_no_textbox'  // clicked trigger but no textbox appeared
+  | 'login_required'       // session expired, need /connect
+  | 'group_no_permission'  // user can't post in this group
+  | 'fb_blocked'           // captcha/checkpoint/temp-block — back off
+  | 'network_error'        // navigation/connectivity flake
+  | 'image_missing'        // local image path invalid
+  | 'submit_failed'        // composer opened but post button never clicked
+  | 'unknown';
+
+/**
+ * Failure kinds that should NOT count toward the consecutive-failure streak
+ * that triggers campaign auto-pause. These are technical or transient — they
+ * resolve on their own and shouldn't freeze a working campaign over a single
+ * DOM drift or network blip.
+ */
+export const TRANSIENT_FAILURE_KINDS: ReadonlySet<FailureKind> = new Set([
+  'composer_not_found',
+  'composer_no_textbox',
+  'network_error',
+]);
+
 export interface PostToGroupResult {
   success: boolean;
   blocker?: BlockerKind;
   message: string;
   screenshotPath: string | null;
+  /** Why it failed. Always set when `success===false`. Omitted on success. */
+  kind?: FailureKind;
 }
 
 async function safeScreenshot(
@@ -284,12 +316,19 @@ async function findComposerTriggerCandidates(
   // Hebrew variants we cover: gendered imperatives (כתוב/כתבי/כתבו),
   // "מה את/אתה/אתם חושב…", "מה ברצונך…", "מה בא לך לכתוב", "פרסמי כאן",
   // "שתפי משהו", "רוצה לשתף". English: standard FB phrases.
+  // Patterns updated iter5: added "כאן כותבים…" / "כותבים כאן" (impersonal
+  // plural — gender-neutral form FB uses across many groups), more share/
+  // post-here variants, and English "write here" / "post here" / "post to
+  // group". The "כאן כותבים…" trigger was the deal-breaker found in iter4
+  // dump v2 — a div[role="button" tabindex="0"] with this exact text and
+  // no aria-anything.
   const composerTextRe =
-    /(?:כת(?:וב|בי|בו)\s*משהו|כת(?:וב|בי|בו)\s*פוסט|מה\s*את[הם]?\s*חושב|מה\s*ברצונ[ךה]|מה\s*ב?א\s*ל[ךך]\s*לכתוב|פרסמ[יו]?\s*כאן|פרסמ[יו]?\s*משהו|שתפ[יו]?\s*משהו|רוצ[הי]\s*לשתף|Write\s+something|What'?s\s+on\s+your\s+mind|Create\s+a(?:\s+public)?\s+post|Start\s+a\s+(?:public\s+)?post|Share\s+something|Create\s+post)/i;
+    /(?:כת(?:וב|בי|בו)\s*(?:משהו|פוסט|כאן)|כאן\s*כותב(?:ים|ות|ת|י)?|כותב(?:ים|ות|ת|י)?\s*כאן|מה\s*את(?:ה|ם|ן)?\s*חושב|מה\s*ברצונ[ךה]|מה\s*ב?א\s*ל[ךי]\s*לכתוב|פרסמ[יוןן]?\s*(?:כאן|משהו|לקבוצה|בקבוצה)|שתפ[יוןן]?\s*(?:כאן|משהו|לקבוצה)|רוצ[הי]\s*לשתף|פוסט\s+חדש|Write\s+(?:something|here|a\s+post)|What'?s\s+on\s+your\s+mind|Create\s+a(?:\s+public)?\s+post|Start\s+a\s+(?:public\s+)?post|Share\s+(?:something|here)|Post\s+(?:here|to\s+group)|Create\s+post)/i;
   const textScanContainers = [
     '[data-pagelet*="GroupFeed" i]',
     '[data-pagelet*="composer" i]',
     '[role="main"]',
+    '[data-pagelet="ProfileTimeline"]',
   ];
   type ScoredText = { loc: Locator; text: string; width: number; y: number };
   for (const containerSel of textScanContainers) {
@@ -300,14 +339,19 @@ async function findComposerTriggerCandidates(
       .all()
       .catch(() => []);
     const textScored: ScoredText[] = [];
-    for (const el of els.slice(0, 80)) {
+    // Slice raised 80 → 120 (composer can sit deep when group has dense
+    // recommendation cards above). Length cap tightened 80 → 40 — real
+    // placeholders are short; longer text is a wrapper that bundled a
+    // post body (false positive guard).
+    for (const el of els.slice(0, 120)) {
       if (!(await el.isVisible({ timeout: 100 }).catch(() => false))) continue;
       const text = ((await el.textContent().catch(() => '')) ?? '').replace(/\s+/g, ' ').trim();
-      if (!text || text.length > 80) continue;
+      if (!text || text.length > 40) continue;
       if (!composerTextRe.test(text)) continue;
       const box = await el.boundingBox().catch(() => null);
       if (!box) continue;
-      if (box.width < 200 || box.y < 80 || box.y > 900) continue;
+      // y window 80-1100 (was 80-900: "כאן כותבים…" observed at y=757).
+      if (box.width < 200 || box.y < 80 || box.y > 1100) continue;
       textScored.push({ loc: el, text, width: box.width, y: box.y });
     }
     // Largest first — the parent composer trigger has wider bounds than
@@ -339,25 +383,45 @@ async function findComposerTriggerCandidates(
   // / contenteditable / role=textbox ancestor. The ancestor is the actual
   // click target.
   const placeholderPhrases = [
+    // Hebrew gendered imperatives
     'כתבי משהו',
     'כתוב משהו',
     'כתבו משהו',
     'כתבי פוסט',
     'כתוב פוסט',
     'כתבו פוסט',
+    // Hebrew impersonal plural — observed in iter4 dump as the actual trigger
+    'כאן כותבים',
+    'כאן כותבות',
+    'כאן כותבת',
+    'כותבים כאן',
+    'כותבות כאן',
+    'כתבו כאן',
+    'כתוב כאן',
+    'כתבי כאן',
+    // Hebrew questions
     'מה בא לך לכתוב',
     'מה ברצונך לפרסם',
     'מה ברצונך',
+    // Hebrew share/post
     'פרסמי כאן',
     'פרסם משהו',
+    'פרסם כאן',
+    'פרסמו כאן',
     'שתפי משהו',
     'שתף משהו',
+    'שתפי כאן',
+    // English
     'Write something',
+    'Write here',
     "What's on your mind",
     'Create a post',
     'Create a public post',
     'Start a public post',
     'Share something',
+    'Share here',
+    'Post here',
+    'Post to group',
   ];
   for (const phrase of placeholderPhrases) {
     try {
@@ -654,7 +718,7 @@ export async function postToGroup(opts: PostToGroupOpts): Promise<PostToGroupRes
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error({ err, jobId }, 'poster: failed to acquire page');
-    return { success: false, message, screenshotPath: null };
+    return { success: false, message, screenshotPath: null, kind: 'network_error' };
   }
 
   const text = spinVariations ? spinText(opts.text) : opts.text;
@@ -674,6 +738,7 @@ export async function postToGroup(opts: PostToGroupOpts): Promise<PostToGroupRes
         blocker: blockerCheck.kind,
         message: `Blocked: ${blockerCheck.kind} (${blockerCheck.evidence ?? 'n/a'})`,
         screenshotPath,
+        kind: blockerCheck.kind === 'login-required' ? 'login_required' : 'fb_blocked',
       };
     }
 
@@ -685,7 +750,7 @@ export async function postToGroup(opts: PostToGroupOpts): Promise<PostToGroupRes
       const screenshotPath = await safeScreenshot(page, screenshotDir, jobId, 'fail');
       const msg = 'Composer trigger not found (FB DOM may have changed)';
       logger.warn({ jobId }, `poster: ${msg}`);
-      return { success: false, message: msg, screenshotPath };
+      return { success: false, message: msg, screenshotPath, kind: 'composer_not_found' };
     }
 
     // Try each candidate in rank order. A "wrong" trigger (e.g. anonymous-
@@ -743,7 +808,7 @@ export async function postToGroup(opts: PostToGroupOpts): Promise<PostToGroupRes
       const screenshotPath = await safeScreenshot(page, screenshotDir, jobId, 'fail');
       const msg = `Composer textbox not found after trying ${maxAttempts} candidate(s)`;
       logger.warn({ jobId, attemptsTried: maxAttempts }, `poster: ${msg}`);
-      return { success: false, message: msg, screenshotPath };
+      return { success: false, message: msg, screenshotPath, kind: 'composer_no_textbox' };
     }
 
     await textbox.click({ delay: randomBetween(40, 120) }).catch(() => {});
@@ -757,7 +822,7 @@ export async function postToGroup(opts: PostToGroupOpts): Promise<PostToGroupRes
         const screenshotPath = await safeScreenshot(page, screenshotDir, jobId, 'fail');
         const msg = `Image not found at path: ${absImage}`;
         logger.warn({ jobId, absImage }, `poster: ${msg}`);
-        return { success: false, message: msg, screenshotPath };
+        return { success: false, message: msg, screenshotPath, kind: 'image_missing' };
       }
 
       const photoBtn = await findPhotoButton(scope);
@@ -771,7 +836,7 @@ export async function postToGroup(opts: PostToGroupOpts): Promise<PostToGroupRes
         const screenshotPath = await safeScreenshot(page, screenshotDir, jobId, 'fail');
         const msg = 'Photo file input not found';
         logger.warn({ jobId }, `poster: ${msg}`);
-        return { success: false, message: msg, screenshotPath };
+        return { success: false, message: msg, screenshotPath, kind: 'submit_failed' };
       }
 
       await fileInput.setInputFiles(absImage);
@@ -791,7 +856,7 @@ export async function postToGroup(opts: PostToGroupOpts): Promise<PostToGroupRes
       const screenshotPath = await safeScreenshot(page, screenshotDir, jobId, 'fail');
       const msg = 'Post/פרסום submit button not found (or disabled)';
       logger.warn({ jobId }, `poster: ${msg}`);
-      return { success: false, message: msg, screenshotPath };
+      return { success: false, message: msg, screenshotPath, kind: 'submit_failed' };
     }
 
     await submitBtn.click({ delay: randomBetween(40, 120) });
@@ -813,6 +878,7 @@ export async function postToGroup(opts: PostToGroupOpts): Promise<PostToGroupRes
         blocker: blockerCheck.kind,
         message: `Blocked after submit: ${blockerCheck.kind} (${blockerCheck.evidence ?? 'n/a'})`,
         screenshotPath,
+        kind: blockerCheck.kind === 'login-required' ? 'login_required' : 'fb_blocked',
       };
     }
 
@@ -827,6 +893,14 @@ export async function postToGroup(opts: PostToGroupOpts): Promise<PostToGroupRes
     const message = err instanceof Error ? err.message : String(err);
     logger.error({ err, jobId, groupUrl }, 'poster: unexpected error');
     const screenshotPath = await safeScreenshot(page, screenshotDir, jobId, 'fail');
-    return { success: false, message, screenshotPath };
+    // Network/timeout errors thrown by Playwright look like "Timeout 45000ms
+    // exceeded" or "net::ERR_*" — bucket those as transient.
+    const isNetworkLike = /timeout|net::|ERR_|ECONN|ENOTFOUND|navigation/i.test(message);
+    return {
+      success: false,
+      message,
+      screenshotPath,
+      kind: isNetworkLike ? 'network_error' : 'unknown',
+    };
   }
 }

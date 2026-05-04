@@ -271,8 +271,60 @@ async function findComposerTriggerCandidates(
     /* ignore */
   }
 
+  // Strategy 7 — textContent match on clickable divs / tabindex elements.
+  //
+  // The current FB groups layout (observed across multiple groups) ships the
+  // primary composer trigger as a div[role="button"] (or just tabindex=0)
+  // whose only accessible content is a child span saying "כתבי משהו..." /
+  // "Write something..." — no aria-label, no contenteditable role=textbox.
+  // Strategies 1-6 all miss it. We walk clickable elements inside the feed
+  // pagelet, match their textContent against a composer-phrase regex with a
+  // tight length cap (so we don't match a full post body), and rank by width.
+  //
+  // Hebrew variants we cover: gendered imperatives (כתוב/כתבי/כתבו),
+  // "מה את/אתה/אתם חושב…", "מה ברצונך…", "מה בא לך לכתוב", "פרסמי כאן",
+  // "שתפי משהו", "רוצה לשתף". English: standard FB phrases.
+  const composerTextRe =
+    /(?:כת(?:וב|בי|בו)\s*משהו|כת(?:וב|בי|בו)\s*פוסט|מה\s*את[הם]?\s*חושב|מה\s*ברצונ[ךה]|מה\s*ב?א\s*ל[ךך]\s*לכתוב|פרסמ[יו]?\s*כאן|פרסמ[יו]?\s*משהו|שתפ[יו]?\s*משהו|רוצ[הי]\s*לשתף|Write\s+something|What'?s\s+on\s+your\s+mind|Create\s+a(?:\s+public)?\s+post|Start\s+a\s+(?:public\s+)?post|Share\s+something|Create\s+post)/i;
+  const textScanContainers = [
+    '[data-pagelet*="GroupFeed" i]',
+    '[data-pagelet*="composer" i]',
+    '[role="main"]',
+  ];
+  type ScoredText = { loc: Locator; text: string; width: number; y: number };
+  for (const containerSel of textScanContainers) {
+    const container = page.locator(containerSel).first();
+    if (!(await container.isVisible({ timeout: 500 }).catch(() => false))) continue;
+    const els = await container
+      .locator('[role="button"], [tabindex="0"], [contenteditable]')
+      .all()
+      .catch(() => []);
+    const textScored: ScoredText[] = [];
+    for (const el of els.slice(0, 80)) {
+      if (!(await el.isVisible({ timeout: 100 }).catch(() => false))) continue;
+      const text = ((await el.textContent().catch(() => '')) ?? '').replace(/\s+/g, ' ').trim();
+      if (!text || text.length > 80) continue;
+      if (!composerTextRe.test(text)) continue;
+      const box = await el.boundingBox().catch(() => null);
+      if (!box) continue;
+      if (box.width < 200 || box.y < 80 || box.y > 900) continue;
+      textScored.push({ loc: el, text, width: box.width, y: box.y });
+    }
+    // Largest first — the parent composer trigger has wider bounds than
+    // any inner span that also matches the same text.
+    textScored.sort((a, b) => b.width - a.width);
+    for (const s of textScored.slice(0, 4)) {
+      logger.info(
+        { jobId, text: s.text.slice(0, 100), w: Math.round(s.width), y: Math.round(s.y) },
+        'poster: composer candidate via Strategy 7 (textContent match)',
+      );
+      await tryAdd(s.loc);
+    }
+    if (textScored.length > 0) break; // first container with hits wins
+  }
+
   if (out.length === 0) {
-    await dumpButtonAriaLabels(page, jobId);
+    await dumpClickableElements(page, jobId);
   } else {
     logger.info({ jobId, candidateCount: out.length }, 'poster: composer trigger candidates ranked');
   }
@@ -280,33 +332,71 @@ async function findComposerTriggerCandidates(
 }
 
 /**
- * Diagnostic helper: log up to 30 visible role=button aria-labels with their
- * positions, to help narrow down the next composer-selector iteration.
+ * Extended diagnostic: dump up to 40 visible clickable elements with both
+ * aria-label AND textContent, plus tag/role/tabindex/contenteditable, so the
+ * next selector iteration can match by text when aria-label is absent.
  *
- * Best-effort: any failure here is swallowed (this runs on the failure path
- * already, we don't want it to mask the real error).
+ * The previous version only dumped aria-labels — that missed the actual
+ * composer trigger entirely on layouts where it's a div[role="button"] with
+ * a child span text "כתבי משהו..." and no aria-label of its own.
+ *
+ * Done in a single page.evaluate to avoid an N+1 round-trip storm on a page
+ * that may have hundreds of clickable elements.
+ *
+ * Best-effort: any failure is swallowed — this runs on the failure path,
+ * shouldn't mask the real error.
  */
-async function dumpButtonAriaLabels(page: Page, jobId?: string): Promise<void> {
+async function dumpClickableElements(page: Page, jobId?: string): Promise<void> {
   try {
-    const all = await page.locator('[role="button"][aria-label]').all().catch(() => []);
-    const sample: Array<{ label: string; x: number; y: number; w: number; visible: boolean }> = [];
-    for (const btn of all.slice(0, 80)) {
-      if (sample.length >= 30) break;
-      const aria = (await btn.getAttribute('aria-label').catch(() => null)) || '';
-      if (!aria) continue;
-      const visible = await btn.isVisible({ timeout: 80 }).catch(() => false);
-      const box = visible ? await btn.boundingBox().catch(() => null) : null;
-      sample.push({
-        label: aria.slice(0, 80),
-        x: box ? Math.round(box.x) : -1,
-        y: box ? Math.round(box.y) : -1,
-        w: box ? Math.round(box.width) : -1,
-        visible,
-      });
-    }
+    const sample = await page
+      .evaluate(() => {
+        const els = Array.from(
+          document.querySelectorAll(
+            'div[role="button"], a[role="button"], button, [tabindex="0"], [contenteditable]',
+          ),
+        );
+        const out: Array<{
+          tag: string;
+          ariaLabel: string | null;
+          text: string;
+          role: string | null;
+          contentEditable: string | null;
+          tabindex: string | null;
+          x: number;
+          y: number;
+          w: number;
+          h: number;
+          visible: boolean;
+        }> = [];
+        const seen = new Set<Element>();
+        for (const el of els) {
+          if (seen.has(el)) continue;
+          seen.add(el);
+          if (out.length >= 40) break;
+          const e = el as HTMLElement;
+          const r = e.getBoundingClientRect();
+          const visible = r.width > 0 && r.height > 0;
+          const text = (e.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+          out.push({
+            tag: e.tagName.toLowerCase(),
+            ariaLabel: e.getAttribute('aria-label'),
+            text,
+            role: e.getAttribute('role'),
+            contentEditable: e.getAttribute('contenteditable'),
+            tabindex: e.getAttribute('tabindex'),
+            x: Math.round(r.x),
+            y: Math.round(r.y),
+            w: Math.round(r.width),
+            h: Math.round(r.height),
+            visible,
+          });
+        }
+        return out;
+      })
+      .catch(() => [] as never[]);
     logger.warn(
-      { jobId, sampleCount: sample.length, sampleAriaLabels: sample },
-      'poster: composer trigger not found — sample of page buttons (use this to extend selectors)',
+      { jobId, sampleCount: sample.length, sample },
+      'poster: composer trigger not found — extended dump (button/role/tabindex/contenteditable)',
     );
   } catch {
     /* swallow — diagnostic only */

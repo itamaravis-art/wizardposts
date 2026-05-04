@@ -19,6 +19,7 @@ import { getUserSettings } from '@/lib/db/queries/settings';
 import { handleRouteError, HttpError } from '../../_lib/route-helpers';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 const bodySchema = z
   .object({

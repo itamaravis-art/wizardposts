@@ -28,10 +28,22 @@ const client =
     ssl: 'require',
     // Transaction pooler (port 6543) does NOT support prepared statements.
     prepare: false,
-    // Keep pool small per-instance — Vercel can spin up many concurrent fns.
-    max: 1,
+    // `max: 1` serialised every concurrent request inside a warm Vercel
+    // instance, which combined with the SSE stream and slow auth produced
+    // FUNCTION_INVOCATION_TIMEOUT cascades. The Supabase Transaction Pooler
+    // multiplexes many client connections onto a small backend pool, so we
+    // can safely allow a handful of concurrent connections per fn instance.
+    max: 5,
     idle_timeout: 20,
     max_lifetime: 60 * 30,
+    // Don't let a slow handshake eat the whole 10 s function budget.
+    connect_timeout: 5,
+    // Server-side cap on any single statement. Anything longer means we hit
+    // a pathological query — fail the request fast instead of timing out the
+    // entire serverless invocation.
+    connection: {
+      statement_timeout: 5_000,
+    },
   });
 
 if (process.env.NODE_ENV !== 'production') {

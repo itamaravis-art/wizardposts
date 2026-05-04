@@ -82,41 +82,68 @@ async function findFirstVisible(
 }
 
 async function findComposerTrigger(page: Page): Promise<Locator | null> {
+  // Wait for the group page to settle and scroll a bit so the composer area
+  // enters the viewport (FB lazy-renders below the fold).
   try {
-    await page.evaluate(() => window.scrollTo(0, 350));
-    await page.waitForTimeout(800);
+    await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+    await page.evaluate(() => window.scrollTo(0, 400));
+    await page.waitForTimeout(1500);
   } catch {
     /* ignore */
   }
 
-  const reTexts = /(Write something|What's on your mind|Create a (?:public )?post|כתבו? משהו|מה בא לך לכתוב|צור פוסט)/i;
+  // Strategy 1 — getByRole + name regex (most resilient: matches text content
+  // even when aria-label is absent). Covers EN + Hebrew + variants.
+  const reTexts =
+    /(Write something|Write a post|What's on your mind|Create a (?:public )?post|Start a public post|Create post|Share something|כתבו? משהו|כתוב משהו|מה בא לך לכתוב|מה ברצונך לפרסם|צור פוסט|כתוב פוסט|פרסם משהו)/i;
   try {
     const byRole = page.getByRole('button', { name: reTexts }).first();
-    if (await byRole.isVisible({ timeout: 4000 }).catch(() => false)) return byRole;
+    if (await byRole.isVisible({ timeout: 6000 }).catch(() => false)) return byRole;
   } catch {
     /* ignore */
   }
 
+  // Strategy 2 — aria-label substring match (older + Hebrew layouts).
   const ariaSelectors = [
     '[role="button"][aria-label*="Write something" i]',
+    '[role="button"][aria-label*="Write a post" i]',
     '[role="button"][aria-label*="Create a post" i]',
+    '[role="button"][aria-label*="Create post" i]',
     '[role="button"][aria-label*="What\'s on your mind" i]',
+    '[role="button"][aria-label*="Start a post" i]',
+    '[role="button"][aria-label*="Share something" i]',
     '[role="button"][aria-label*="כתוב משהו"]',
     '[role="button"][aria-label*="כתבו משהו"]',
+    '[role="button"][aria-label*="כתוב פוסט"]',
     '[role="button"][aria-label*="צור פוסט"]',
+    '[role="button"][aria-label*="פרסם משהו"]',
+    '[role="button"][aria-label*="מה ברצונך"]',
   ];
-  const byAria = await findFirstVisible(page, ariaSelectors, 2000);
+  const byAria = await findFirstVisible(page, ariaSelectors, 3000);
   if (byAria) return byAria;
 
+  // Strategy 3 — locate the literal text, climb to the nearest button.
+  const textRegex =
+    /^\s*(Write something\.{0,3}|What's on your mind\??|Create a (?:public )?post\.{0,3}|Start a public post\.{0,3}|Share something\.{0,3}|כתבו? משהו\.{0,3}|כתוב משהו\.{0,3}|מה בא לך לכתוב\??|צור פוסט\.{0,3}|פרסם משהו\.{0,3})\s*$/i;
   try {
-    const textNode = page
-      .getByText(/^\s*(Write something\.\.\.|What's on your mind\?|כתבו? משהו\.\.\.|מה בא לך לכתוב\?)\s*$/i)
-      .first();
+    const textNode = page.getByText(textRegex).first();
     if (await textNode.isVisible({ timeout: 2000 }).catch(() => false)) {
       const button = textNode.locator('xpath=ancestor::*[@role="button"][1]').first();
       if (await button.isVisible({ timeout: 1000 }).catch(() => false)) return button;
       return textNode;
     }
+  } catch {
+    /* ignore */
+  }
+
+  // Strategy 4 — read-only contenteditable that opens composer on click.
+  // Some new FB layouts present the composer as a fake textbox that expands.
+  try {
+    const fakeBox = page
+      .locator('[role="textbox"][contenteditable], [contenteditable="false"][role="textbox"]')
+      .filter({ hasText: textRegex })
+      .first();
+    if (await fakeBox.isVisible({ timeout: 1500 }).catch(() => false)) return fakeBox;
   } catch {
     /* ignore */
   }

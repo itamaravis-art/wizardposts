@@ -243,21 +243,37 @@ export default function WorkerPage() {
             <Step n={2} title="חלץ את הקובץ והעתק את הטוקן">
               <p className="text-muted-foreground">
                 חלץ ל-<code className="px-1.5 py-0.5 rounded bg-surface-2 ltr-text">
-                  C:\WizardPostsWorker
+                  C:\wizardposts-worker
                 </code>{' '}
                 (או כל מקום אחר). פתח את הקובץ <code className="px-1.5 py-0.5 rounded bg-surface-2 ltr-text">.env</code>{' '}
-                והדבק את הטוקן בשורה:
+                והדבק את הטוקן בשורה (שים לב: <code>API_BASE_URL</code>, לא <code>SERVER_URL</code>):
               </p>
               <pre className="mt-2 p-3 rounded-lg bg-slate-900 text-slate-100 text-xs ltr-text overflow-x-auto">
                 <code>{`WORKER_TOKEN=wp_xxxxxxxxxxxxxxxxxxxxxxxx
-SERVER_URL=https://wizardposts.app`}</code>
+API_BASE_URL=https://wizardposts.vercel.app`}</code>
               </pre>
             </Step>
-            <Step n={3} title="הפעל את הסוכן">
+            <Step n={3} title="התקן תלויות (פעם אחת)">
               <p className="text-muted-foreground">
-                לחץ פעמיים על <code className="px-1.5 py-0.5 rounded bg-surface-2 ltr-text">start.bat</code>.
-                בפעם הראשונה ייפתח חלון פייסבוק — התחבר רגיל. בעתיד הסוכן ירוץ ברקע
-                והכל אוטומטי.
+                פתח Command Prompt בתיקיית ה-Worker והרץ (כל פקודה בנפרד):
+              </p>
+              <pre className="mt-2 p-3 rounded-lg bg-slate-900 text-slate-100 text-xs ltr-text overflow-x-auto">
+                <code>{`npm install
+npx playwright install chromium`}</code>
+              </pre>
+            </Step>
+            <Step n={4} title="חבר את חשבון פייסבוק">
+              <p className="text-muted-foreground">
+                הרץ <code className="px-1.5 py-0.5 rounded bg-surface-2 ltr-text">npm run connect</code>.
+                ייפתח חלון Chromium — התחבר ידנית עם החשבון, וודא שאתה מגיע לפיד הראשי
+                של פייסבוק (רואה פוסטים), וסגור את החלון.
+              </p>
+            </Step>
+            <Step n={5} title="הפעל את הסוכן">
+              <p className="text-muted-foreground">
+                לחץ פעמיים על <code className="px-1.5 py-0.5 rounded bg-surface-2 ltr-text">start.bat</code>{' '}
+                או הרץ <code className="px-1.5 py-0.5 rounded bg-surface-2 ltr-text">npm start</code>.
+                ה-Worker יתחיל למשוך משימות מהענן ולפרסם.
               </p>
             </Step>
           </ol>

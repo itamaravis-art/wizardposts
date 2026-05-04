@@ -1,6 +1,7 @@
 // CLI entry: opens a visible browser, polls until the user logs in, persists state
 // to the cloud API (no local DB).
 
+import 'dotenv/config'; // Load .env BEFORE reading process.env.WORKER_TOKEN/API_BASE_URL
 import { launchBrowser } from './launcher.js';
 import { getOrCreatePage, isLoggedIn, getLoggedInUserName } from './session.js';
 import { logger } from '../utils/logger.js';

@@ -8,6 +8,9 @@ import { users } from '@/lib/db/schema';
 import { getUserId, handleRouteError } from '../_lib/route-helpers';
 
 export const runtime = 'nodejs';
+// /connect polls this every 5s — fb_connected status must NEVER come from a cache.
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export async function GET() {
   try {

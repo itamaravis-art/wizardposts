@@ -323,6 +323,128 @@ async function findComposerTriggerCandidates(
     if (textScored.length > 0) break; // first container with hits wins
   }
 
+  // Strategy 8 — placeholder leaf → climb to clickable ancestor.
+  //
+  // FB renders the composer trigger as a div[role="button"] wrapping a tiny
+  // leaf node (span/div) holding the placeholder text "כתבי משהו..." —
+  // strategies 1-7 miss it because:
+  //   - Strategy 3 uses anchored regex (^...$) and the parent's textContent
+  //     concatenates avatar/decorations alongside the placeholder.
+  //   - Strategy 7 caps textContent at 80 chars; the parent button text
+  //     exceeds this when avatar/aria-decorations are concatenated.
+  //
+  // Approach: use Playwright's getByText() to find the leaf node containing
+  // the literal placeholder phrase (substring match — handles "כתבי משהו..."
+  // matching the search "כתבי משהו"), then climb to the nearest role=button
+  // / contenteditable / role=textbox ancestor. The ancestor is the actual
+  // click target.
+  const placeholderPhrases = [
+    'כתבי משהו',
+    'כתוב משהו',
+    'כתבו משהו',
+    'כתבי פוסט',
+    'כתוב פוסט',
+    'כתבו פוסט',
+    'מה בא לך לכתוב',
+    'מה ברצונך לפרסם',
+    'מה ברצונך',
+    'פרסמי כאן',
+    'פרסם משהו',
+    'שתפי משהו',
+    'שתף משהו',
+    'Write something',
+    "What's on your mind",
+    'Create a post',
+    'Create a public post',
+    'Start a public post',
+    'Share something',
+  ];
+  for (const phrase of placeholderPhrases) {
+    try {
+      const textNode = page.getByText(phrase, { exact: false }).first();
+      if (!(await textNode.isVisible({ timeout: 500 }).catch(() => false))) continue;
+      // Try ancestors in priority order: role=button → contenteditable → role=textbox.
+      const ancestorButton = textNode
+        .locator('xpath=ancestor-or-self::*[@role="button"][1]')
+        .first();
+      let added = false;
+      if (await ancestorButton.isVisible({ timeout: 400 }).catch(() => false)) {
+        const box = await ancestorButton.boundingBox().catch(() => null);
+        if (box && box.width >= 150 && box.y >= 80 && box.y <= 1100) {
+          logger.info(
+            { jobId, phrase, w: Math.round(box.width), y: Math.round(box.y) },
+            'poster: composer candidate via Strategy 8 (placeholder leaf → role=button)',
+          );
+          await tryAdd(ancestorButton);
+          added = true;
+        }
+      }
+      if (!added) {
+        const ancestorEditable = textNode
+          .locator('xpath=ancestor-or-self::*[@contenteditable or @role="textbox"][1]')
+          .first();
+        if (await ancestorEditable.isVisible({ timeout: 400 }).catch(() => false)) {
+          logger.info(
+            { jobId, phrase },
+            'poster: composer candidate via Strategy 8 (placeholder leaf → contenteditable/textbox)',
+          );
+          await tryAdd(ancestorEditable);
+          added = true;
+        }
+      }
+      if (!added) {
+        // No clickable ancestor; the leaf itself often works (FB sometimes
+        // attaches the click handler directly).
+        logger.info(
+          { jobId, phrase },
+          'poster: composer candidate via Strategy 8 (placeholder leaf, no clickable ancestor)',
+        );
+        await tryAdd(textNode);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Strategy 9 — aria-placeholder match on any element, climb to clickable.
+  //
+  // Catches the FB layout variant where the composer is a div with
+  // aria-placeholder set on the textbox/button itself but no role=textbox
+  // (Strategy 6 required role=textbox; this one doesn't).
+  const ariaPlaceholderSelectors = [
+    '[aria-placeholder*="כתבי משהו"]',
+    '[aria-placeholder*="כתוב משהו"]',
+    '[aria-placeholder*="כתבו משהו"]',
+    '[aria-placeholder*="כתבי פוסט"]',
+    '[aria-placeholder*="פרסמי" i]',
+    '[aria-placeholder*="פרסם משהו"]',
+    '[aria-placeholder*="מה ברצונ" i]',
+    '[aria-placeholder*="מה בא לך"]',
+    '[aria-placeholder*="Write something" i]',
+    '[aria-placeholder*="What\'s on your mind" i]',
+    '[aria-placeholder*="Create a post" i]',
+    '[aria-placeholder*="Share something" i]',
+  ];
+  for (const sel of ariaPlaceholderSelectors) {
+    try {
+      const el = page.locator(sel).first();
+      if (!(await el.isVisible({ timeout: 400 }).catch(() => false))) continue;
+      const ancestor = el
+        .locator(
+          'xpath=ancestor-or-self::*[@role="button" or @contenteditable or @role="textbox"][1]',
+        )
+        .first();
+      if (await ancestor.isVisible({ timeout: 300 }).catch(() => false)) {
+        logger.info({ jobId, selector: sel }, 'poster: composer candidate via Strategy 9 (aria-placeholder)');
+        await tryAdd(ancestor);
+      } else {
+        await tryAdd(el);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   if (out.length === 0) {
     await dumpClickableElements(page, jobId);
   } else {
@@ -332,71 +454,92 @@ async function findComposerTriggerCandidates(
 }
 
 /**
- * Extended diagnostic: dump up to 40 visible clickable elements with both
- * aria-label AND textContent, plus tag/role/tabindex/contenteditable, so the
- * next selector iteration can match by text when aria-label is absent.
+ * Extended diagnostic v2: smarter sampling that actually shows the composer
+ * area when our selectors fail.
  *
- * The previous version only dumped aria-labels — that missed the actual
- * composer trigger entirely on layouts where it's a div[role="button"] with
- * a child span text "כתבי משהו..." and no aria-label of its own.
+ * Iteration 3 in the field hit `sampleCount: 40` but the composer at y=622
+ * was absent from the dump — 22 of the 40 entries were empty `<a tabindex="0">`
+ * avatar links above the composer in DOM order, and the cap of 40 cut off
+ * before reaching it. This version:
  *
- * Done in a single page.evaluate to avoid an N+1 round-trip storm on a page
- * that may have hundreds of clickable elements.
+ *   1. Scrolls the page mid-feed first to force lazy-rendered elements
+ *      (FB only mounts the composer once it's near the viewport).
+ *   2. Filters out tiny / off-screen / obviously-decorative elements
+ *      (avatars are typically w<80, h<32, empty text, no aria-label).
+ *   3. Sorts by y ascending so vertically-clustered groups (header, then
+ *      composer area, then feed) appear in spatial order, not DOM order.
+ *   4. Caps at 100 (was 40).
+ *   5. Includes aria-placeholder and data-text attributes — common
+ *      placeholder carriers on FB's contenteditable composer.
  *
- * Best-effort: any failure is swallowed — this runs on the failure path,
- * shouldn't mask the real error.
+ * Single page.evaluate to avoid N+1 roundtrip storm.
  */
 async function dumpClickableElements(page: Page, jobId?: string): Promise<void> {
+  // Scroll to force lazy-mounted composer to render before we sample.
+  try {
+    await page.evaluate(() => window.scrollTo({ top: 400, behavior: 'instant' as ScrollBehavior }));
+    await page.waitForTimeout(500);
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior }));
+    await page.waitForTimeout(300);
+  } catch {
+    /* ignore */
+  }
+
   try {
     const sample = await page
       .evaluate(() => {
         const els = Array.from(
           document.querySelectorAll(
-            'div[role="button"], a[role="button"], button, [tabindex="0"], [contenteditable]',
+            'div[role="button"], a[role="button"], button, [tabindex="0"], [contenteditable], [aria-placeholder], [role="textbox"]',
           ),
         );
-        const out: Array<{
-          tag: string;
-          ariaLabel: string | null;
-          text: string;
-          role: string | null;
-          contentEditable: string | null;
-          tabindex: string | null;
-          x: number;
-          y: number;
-          w: number;
-          h: number;
-          visible: boolean;
-        }> = [];
         const seen = new Set<Element>();
+        const enriched: Array<{ el: HTMLElement; r: DOMRect }> = [];
         for (const el of els) {
           if (seen.has(el)) continue;
           seen.add(el);
-          if (out.length >= 40) break;
-          const e = el as HTMLElement;
-          const r = e.getBoundingClientRect();
-          const visible = r.width > 0 && r.height > 0;
-          const text = (e.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 100);
-          out.push({
-            tag: e.tagName.toLowerCase(),
-            ariaLabel: e.getAttribute('aria-label'),
+          enriched.push({ el: el as HTMLElement, r: (el as HTMLElement).getBoundingClientRect() });
+        }
+        // Filter: drop tiny avatars, off-screen, or empty leaf links.
+        const filtered = enriched.filter(({ el, r }) => {
+          if (r.width < 80 || r.height < 20) return false;
+          if (r.x < -200 || r.y < -200) return false;
+          if (r.y > 2200) return false;
+          const text = (el.textContent || '').trim();
+          const aria = el.getAttribute('aria-label') || '';
+          const placeholder = el.getAttribute('aria-placeholder') || '';
+          // Empty <a> with no aria-label is almost certainly a member-avatar link
+          if (!text && !aria && !placeholder && el.tagName.toLowerCase() === 'a') {
+            return false;
+          }
+          return true;
+        });
+        // Sort by y ascending so the composer row (y ~ 400-700) shows up
+        // alongside its neighbors, not buried after a sea of avatars.
+        filtered.sort((a, b) => a.r.y - b.r.y || a.r.x - b.r.x);
+        return filtered.slice(0, 100).map(({ el, r }) => {
+          const text = (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+          return {
+            tag: el.tagName.toLowerCase(),
+            ariaLabel: el.getAttribute('aria-label'),
             text,
-            role: e.getAttribute('role'),
-            contentEditable: e.getAttribute('contenteditable'),
-            tabindex: e.getAttribute('tabindex'),
+            role: el.getAttribute('role'),
+            contentEditable: el.getAttribute('contenteditable'),
+            tabindex: el.getAttribute('tabindex'),
+            ariaPlaceholder: el.getAttribute('aria-placeholder'),
+            dataText: el.getAttribute('data-text'),
             x: Math.round(r.x),
             y: Math.round(r.y),
             w: Math.round(r.width),
             h: Math.round(r.height),
-            visible,
-          });
-        }
-        return out;
+            visible: r.width > 0 && r.height > 0,
+          };
+        });
       })
       .catch(() => [] as never[]);
     logger.warn(
       { jobId, sampleCount: sample.length, sample },
-      'poster: composer trigger not found — extended dump (button/role/tabindex/contenteditable)',
+      'poster: composer trigger not found — extended dump v2 (filtered, y-sorted, cap 100)',
     );
   } catch {
     /* swallow — diagnostic only */

@@ -81,7 +81,22 @@ async function findFirstVisible(
   return null;
 }
 
-async function findComposerTrigger(page: Page, jobId?: string): Promise<Locator | null> {
+/**
+ * Returns up to N composer-trigger candidates ranked by confidence.
+ *
+ * Why a list and not a single locator: in the wild we sometimes match a button
+ * that *looks* like a composer trigger but actually opens an unrelated modal
+ * (e.g. the FB groups "פוסט אנונימי" feature button — its aria-label contains
+ * "פוסט" so a broad keyword match grabs it, but clicking it shows an info
+ * modal with no textbox). The caller tries each candidate in order until one
+ * yields a visible textbox after the click, ESC-ing any wrong modal between
+ * attempts. This makes the selector logic robust to a single false-positive
+ * without giving up on the whole post.
+ */
+async function findComposerTriggerCandidates(
+  page: Page,
+  jobId?: string,
+): Promise<Locator[]> {
   // FB's group feed React tree settles slowly: domcontentloaded fires long
   // before the inline composer mounts. Give networkidle more headroom and
   // a hydration buffer before any selectors run.
@@ -94,13 +109,35 @@ async function findComposerTrigger(page: Page, jobId?: string): Promise<Locator 
     /* ignore */
   }
 
-  // Strategy 1 — getByRole + name regex (most resilient: matches text content
-  // even when aria-label is absent). Covers EN + Hebrew + variants.
+  const out: Locator[] = [];
+  const seen = new Set<string>();
+  // Dedup by element-handle identity using evaluate, so the same DOM node
+  // matched by two strategies isn't tried twice.
+  const tryAdd = async (loc: Locator | null) => {
+    if (!loc) return;
+    try {
+      if (!(await loc.isVisible({ timeout: 200 }).catch(() => false))) return;
+      const fingerprint = await loc.evaluate((el) => {
+        const e = el as HTMLElement;
+        const r = e.getBoundingClientRect();
+        return `${e.tagName}|${e.getAttribute('aria-label') ?? ''}|${Math.round(r.x)}x${Math.round(r.y)}|${Math.round(r.width)}x${Math.round(r.height)}`;
+      }).catch(() => null);
+      if (!fingerprint || seen.has(fingerprint)) return;
+      seen.add(fingerprint);
+      out.push(loc);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  // Strategy 1 — getByRole + name regex (most resilient).
   const reTexts =
     /(Write something|Write a post|What's on your mind|Create a (?:public )?post|Start a public post|Create post|Share something|כתבו? משהו|כתוב משהו|מה בא לך לכתוב|מה ברצונך לפרסם|צור פוסט|כתוב פוסט|פרסם משהו)/i;
   try {
     const byRole = page.getByRole('button', { name: reTexts }).first();
-    if (await byRole.isVisible({ timeout: 6000 }).catch(() => false)) return byRole;
+    if (await byRole.isVisible({ timeout: 6000 }).catch(() => false)) {
+      await tryAdd(byRole);
+    }
   } catch {
     /* ignore */
   }
@@ -122,7 +159,7 @@ async function findComposerTrigger(page: Page, jobId?: string): Promise<Locator 
     '[role="button"][aria-label*="מה ברצונך"]',
   ];
   const byAria = await findFirstVisible(page, ariaSelectors, 3000);
-  if (byAria) return byAria;
+  await tryAdd(byAria);
 
   // Strategy 3 — locate the literal text, climb to the nearest button.
   const textRegex =
@@ -131,46 +168,56 @@ async function findComposerTrigger(page: Page, jobId?: string): Promise<Locator 
     const textNode = page.getByText(textRegex).first();
     if (await textNode.isVisible({ timeout: 2000 }).catch(() => false)) {
       const button = textNode.locator('xpath=ancestor::*[@role="button"][1]').first();
-      if (await button.isVisible({ timeout: 1000 }).catch(() => false)) return button;
-      return textNode;
+      if (await button.isVisible({ timeout: 1000 }).catch(() => false)) {
+        await tryAdd(button);
+      } else {
+        await tryAdd(textNode);
+      }
     }
   } catch {
     /* ignore */
   }
 
   // Strategy 4 — read-only contenteditable that opens composer on click.
-  // Some new FB layouts present the composer as a fake textbox that expands.
   try {
     const fakeBox = page
       .locator('[role="textbox"][contenteditable], [contenteditable="false"][role="textbox"]')
       .filter({ hasText: textRegex })
       .first();
-    if (await fakeBox.isVisible({ timeout: 1500 }).catch(() => false)) return fakeBox;
+    await tryAdd(fakeBox);
   } catch {
     /* ignore */
   }
 
-  // Strategy 5 — broader keyword scan, scoped + size-filtered.
+  // Strategy 5 — broader keyword scan, scoped + size + position + blacklist.
   //
-  // FB sometimes ships a composer trigger whose only accessible name is an
-  // aria-label we haven't enumerated (icon-only buttons, A/B test variants,
-  // future copy changes). Rather than enumerate every possible phrase, we:
-  //   1. Look only inside containers where the composer normally lives
-  //      (data-pagelet*="GroupFeed" / "composer" / role=main).
-  //   2. Walk the visible role=button elements that have an aria-label.
-  //   3. Filter to ones whose label contains a generic compose keyword
-  //      AND whose bounding box is wide (>200px) and near the top of the
-  //      page (y < 1000) — composer triggers are big and high; comment
-  //      reply buttons further down the feed are narrow and low.
-  // This avoids false-positives on "כתוב תגובה" / "ערוך פוסט" / etc.
+  // FB ships icon-only or A/B-tested composer triggers whose aria-label we
+  // haven't enumerated, so a broad keyword fallback is necessary. To avoid
+  // false-positives like the groups "פוסט אנונימי" / "Anonymous Post"
+  // feature button (matches "פוסט" but opens an info modal, no textbox),
+  // we filter aggressively:
+  //   1. Container scope: must be inside a likely composer pagelet.
+  //   2. Keyword inclusion: aria-label contains a compose verb/noun.
+  //   3. Keyword EXCLUSION (blacklist): obvious non-composer features —
+  //      anonymous post, report, save, search, join, mute, etc.
+  //   4. Size: width >= 250px (real composer triggers are wide; the
+  //      anonymous-post button observed at w=216 is below this floor).
+  //   5. Position: y between 80 and 800 — composer is below the navbar
+  //      and above the first post, never deep in the feed.
+  //   6. Multiple candidates ranked by width descending: a wider button
+  //      is more likely the real composer than a narrow icon-only one.
   const broadHebrew = /כתוב|כתבו|כתיבת|פרסם|שתף|חולק|פוסט/;
   const broadEnglish = /\b(write|post|share|create)\b/i;
+  const blacklist =
+    /(אנונימ|anonymous|דווח|report|מועדפים|saved|חיפוש|search|הצטרף|join|הזמ|invite|התחבר|sign\s*in|התחל|signup|sign\s*up|השתק|mute|חסום|block|בטל\s*חבר|leave|מעקב|follow|הסתר|hide|מחק|delete|ערוך|edit\s+post|תגובה|comment|שמור|save\s+post)/i;
   const containerSelectors = [
     '[data-pagelet*="GroupFeed" i]',
     '[data-pagelet*="GroupInlineComposer" i]',
     '[data-pagelet*="composer" i]',
     '[role="main"]',
   ];
+  type Scored = { loc: Locator; aria: string; width: number; y: number };
+  const scored: Scored[] = [];
   for (const containerSel of containerSelectors) {
     const container = page.locator(containerSel).first();
     if (!(await container.isVisible({ timeout: 500 }).catch(() => false))) continue;
@@ -178,24 +225,58 @@ async function findComposerTrigger(page: Page, jobId?: string): Promise<Locator 
     for (const c of candidates.slice(0, 30)) {
       const aria = (await c.getAttribute('aria-label').catch(() => null)) || '';
       if (!aria) continue;
+      if (blacklist.test(aria)) continue;
       if (!broadHebrew.test(aria) && !broadEnglish.test(aria)) continue;
       if (!(await c.isVisible({ timeout: 200 }).catch(() => false))) continue;
       const box = await c.boundingBox().catch(() => null);
       if (!box) continue;
-      // Composer triggers are wide and live near the top of the feed.
-      if (box.width < 200 || box.y > 1000) continue;
-      logger.info(
-        { jobId, ariaLabel: aria.slice(0, 120), x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width) },
-        'poster: composer matched via Strategy 5 (broad keyword + position)',
-      );
-      return c;
+      if (box.width < 250 || box.y < 80 || box.y > 800) continue;
+      scored.push({ loc: c, aria, width: box.width, y: box.y });
     }
+    if (scored.length > 0) break; // first container with hits wins
+  }
+  scored.sort((a, b) => b.width - a.width); // widest first
+  for (const s of scored.slice(0, 4)) {
+    logger.info(
+      { jobId, ariaLabel: s.aria.slice(0, 120), w: Math.round(s.width), y: Math.round(s.y) },
+      'poster: composer candidate via Strategy 5 (broad+filtered)',
+    );
+    await tryAdd(s.loc);
   }
 
-  // All strategies failed — emit a diagnostic dump so the next iteration of
-  // selectors can be informed by what's actually on the page.
-  await dumpButtonAriaLabels(page, jobId);
-  return null;
+  // Strategy 6 — visible composer textbox by placeholder.
+  // Some FB layouts render the inline textbox directly; clicking it expands
+  // the full composer in-place. The placeholder is canonically composer-y
+  // ("Write something...") and rarely collides with comment textboxes which
+  // use "Write a comment..." (already excluded by our placeholder regex).
+  const placeholderRegex =
+    /(Write something|Write a post|What's on your mind|Create a (?:public )?post|כתוב משהו|כתבו משהו|כתוב פוסט|מה ברצונך|מה בא לך לכתוב|פרסם משהו|צור פוסט)/i;
+  try {
+    const placeholderTextboxes = await page
+      .locator('[role="textbox"][contenteditable]')
+      .all()
+      .catch(() => []);
+    for (const tb of placeholderTextboxes.slice(0, 10)) {
+      const placeholder =
+        (await tb.getAttribute('aria-placeholder').catch(() => null)) ||
+        (await tb.getAttribute('data-placeholder').catch(() => null)) ||
+        (await tb.getAttribute('aria-label').catch(() => null)) ||
+        '';
+      if (!placeholder || !placeholderRegex.test(placeholder)) continue;
+      if (!(await tb.isVisible({ timeout: 200 }).catch(() => false))) continue;
+      logger.info({ jobId, placeholder: placeholder.slice(0, 120) }, 'poster: composer candidate via Strategy 6 (textbox placeholder)');
+      await tryAdd(tb);
+    }
+  } catch {
+    /* ignore */
+  }
+
+  if (out.length === 0) {
+    await dumpButtonAriaLabels(page, jobId);
+  } else {
+    logger.info({ jobId, candidateCount: out.length }, 'poster: composer trigger candidates ranked');
+  }
+  return out;
 }
 
 /**
@@ -366,33 +447,69 @@ export async function postToGroup(opts: PostToGroupOpts): Promise<PostToGroupRes
     await humanScroll(page, { steps: 2 });
     await readingPause(1000, 2500);
 
-    const trigger = await findComposerTrigger(page, jobId);
-    if (!trigger) {
+    const candidates = await findComposerTriggerCandidates(page, jobId);
+    if (candidates.length === 0) {
       const screenshotPath = await safeScreenshot(page, screenshotDir, jobId, 'fail');
       const msg = 'Composer trigger not found (FB DOM may have changed)';
       logger.warn({ jobId }, `poster: ${msg}`);
       return { success: false, message: msg, screenshotPath };
     }
 
-    await trigger.click({ delay: randomBetween(40, 120) });
-    await sleep(1500);
-
+    // Try each candidate in rank order. A "wrong" trigger (e.g. anonymous-
+    // post info button) opens a modal but has no textbox; on that signal we
+    // ESC the modal and try the next-best candidate. Cap at 4 attempts so
+    // a totally wrong page can't loop forever.
+    let textbox: Locator | null = null;
     let scope: Locator | Page = page;
-    const dialog = page.locator('[role="dialog"]').first();
-    const dialogVisible = await dialog.isVisible({ timeout: 3000 }).catch(() => false);
-    if (dialogVisible) {
-      scope = dialog;
-      logger.info({ jobId }, 'poster: using modal-dialog composer');
-    } else {
-      logger.info({ jobId }, 'poster: using inline composer (no dialog)');
-    }
-    await readingPause(800, 1800);
+    // Reference to the dialog locator IF the successful candidate opened one.
+    // Used by the post-submit wait to detect close-of-dialog as a success signal.
+    let dialog: Locator | null = null;
+    let dialogVisible = false;
+    const maxAttempts = Math.min(candidates.length, 4);
+    for (let i = 0; i < maxAttempts; i++) {
+      const trigger = candidates[i];
+      logger.info({ jobId, attempt: i + 1, of: maxAttempts }, 'poster: trying composer candidate');
+      await trigger.click({ delay: randomBetween(40, 120) }).catch(() => {});
+      await sleep(1500);
 
-    const textbox = await findComposerTextbox(scope);
+      const attemptDialog = page.locator('[role="dialog"]').first();
+      const attemptDialogVisible = await attemptDialog.isVisible({ timeout: 3000 }).catch(() => false);
+      const attemptScope: Locator | Page = attemptDialogVisible ? attemptDialog : page;
+      if (attemptDialogVisible) {
+        logger.info({ jobId, attempt: i + 1 }, 'poster: dialog opened, looking for textbox');
+      } else {
+        logger.info({ jobId, attempt: i + 1 }, 'poster: no dialog, looking for inline textbox');
+      }
+      await readingPause(600, 1200);
+
+      const found = await findComposerTextbox(attemptScope);
+      if (found) {
+        textbox = found;
+        scope = attemptScope;
+        dialog = attemptDialogVisible ? attemptDialog : null;
+        dialogVisible = attemptDialogVisible;
+        logger.info({ jobId, attempt: i + 1 }, 'poster: composer textbox confirmed — proceeding');
+        break;
+      }
+
+      // Wrong candidate. Close any modal it opened and continue.
+      logger.warn({ jobId, attempt: i + 1 }, 'poster: candidate did not yield a textbox, trying next');
+      if (attemptDialogVisible) {
+        await page.keyboard.press('Escape').catch(() => {});
+        await sleep(800);
+        // Sometimes ESC is intercepted; click outside as a fallback.
+        const stillOpen = await attemptDialog.isVisible({ timeout: 500 }).catch(() => false);
+        if (stillOpen) {
+          await page.mouse.click(20, 20).catch(() => {});
+          await sleep(500);
+        }
+      }
+    }
+
     if (!textbox) {
       const screenshotPath = await safeScreenshot(page, screenshotDir, jobId, 'fail');
-      const msg = 'Composer textbox not found';
-      logger.warn({ jobId }, `poster: ${msg}`);
+      const msg = `Composer textbox not found after trying ${maxAttempts} candidate(s)`;
+      logger.warn({ jobId, attemptsTried: maxAttempts }, `poster: ${msg}`);
       return { success: false, message: msg, screenshotPath };
     }
 
@@ -448,7 +565,7 @@ export async function postToGroup(opts: PostToGroupOpts): Promise<PostToGroupRes
 
     await Promise.race([
       textbox.waitFor({ state: 'hidden', timeout: 30000 }).catch(() => {}),
-      dialogVisible
+      dialogVisible && dialog
         ? dialog.waitFor({ state: 'hidden', timeout: 30000 }).catch(() => {})
         : sleep(8000),
     ]);

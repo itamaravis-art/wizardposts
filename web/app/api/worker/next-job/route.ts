@@ -34,6 +34,7 @@ import { eq } from 'drizzle-orm';
 import { handleRouteError } from '../../_lib/route-helpers';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {

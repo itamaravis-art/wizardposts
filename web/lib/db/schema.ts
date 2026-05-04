@@ -129,6 +129,11 @@ export const workerTokens = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     token: text('token').notNull().unique(), // bcrypt hash
+    // SHA-256 hex of the plain token. Deterministic, indexable, used as the
+    // primary lookup key so we don't bcrypt-scan every row in the table on
+    // every worker request. Nullable for rows created before this column
+    // existed; those fall back to a (slow) bcrypt scan until rotated.
+    tokenFp: text('token_fp'),
     name: text('name').notNull(),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -138,6 +143,7 @@ export const workerTokens = pgTable(
   },
   (t) => ({
     userIdx: index('worker_tokens_user_id_idx').on(t.userId),
+    tokenFpIdx: index('worker_tokens_token_fp_idx').on(t.tokenFp),
   }),
 );
 

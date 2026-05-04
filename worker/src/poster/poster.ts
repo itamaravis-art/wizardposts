@@ -68,27 +68,75 @@ async function safeScreenshot(
   jobId: string,
   outcome: 'success' | 'fail',
 ): Promise<string | null> {
+  // Iter6 hardening — bug #8 reported only 1 of 4 success screenshots
+  // landed on disk and 0 lines about screenshot/upload appeared in the
+  // worker log. Four changes:
+  //
+  //   1. Get the screenshot as a Buffer first, then fs.writeFile ourselves.
+  //      Previously page.screenshot({ path }) did both internally; if
+  //      Playwright's path-write silently failed (rare but happens with
+  //      page mid-transition or anti-virus interference) we'd get neither
+  //      file nor error. Doing the write ourselves makes both halves
+  //      observable.
+  //   2. Explicit 8s timeout on page.screenshot (Playwright default is
+  //      30s) so a hung capture fails fast and visibly.
+  //   3. Log info on entry, capture, write, and exit. The previous
+  //      version was silent on success which made root-causing
+  //      impossible from logs alone.
+  //   4. Validate buffer length > 0 BEFORE writing — a 0-byte buffer
+  //      means the page wasn't ready to render, retry is hopeless.
   try {
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `job-${jobId}-${outcome}.png`);
-    let captured = true;
-    await page.screenshot({ path: file, fullPage: false }).catch((err) => {
-      captured = false;
+    logger.info({ jobId, outcome, file }, 'poster: safeScreenshot capturing');
+
+    let buffer: Buffer | null = null;
+    try {
+      buffer = await page.screenshot({ fullPage: false, timeout: 8000 });
+    } catch (err) {
       logger.warn(
-        { err: err instanceof Error ? err.message : String(err), file },
-        'poster: screenshot capture failed',
+        { jobId, outcome, file, err: err instanceof Error ? err.message : String(err) },
+        'poster: page.screenshot threw',
       );
-    });
-    if (!captured) return null;
-    // Verify the file actually landed on disk (some headless modes fail silently).
-    if (!fs.existsSync(file)) {
-      logger.warn({ file }, 'poster: screenshot file missing after capture');
       return null;
     }
+
+    if (!buffer || buffer.length === 0) {
+      logger.warn(
+        { jobId, outcome, file, bufferLen: buffer?.length ?? 0 },
+        'poster: screenshot buffer empty (page not rendering?)',
+      );
+      return null;
+    }
+
+    try {
+      await fs.promises.writeFile(file, buffer);
+    } catch (err) {
+      logger.warn(
+        { jobId, outcome, file, err: err instanceof Error ? err.message : String(err) },
+        'poster: writeFile failed',
+      );
+      return null;
+    }
+
+    if (!fs.existsSync(file)) {
+      logger.warn({ jobId, outcome, file }, 'poster: file missing immediately after writeFile');
+      return null;
+    }
+    const stat = fs.statSync(file);
+    if (stat.size === 0) {
+      logger.warn({ jobId, outcome, file }, 'poster: file is 0 bytes after writeFile');
+      return null;
+    }
+
+    logger.info(
+      { jobId, outcome, file, sizeBytes: stat.size },
+      'poster: safeScreenshot saved',
+    );
     return file;
   } catch (err) {
     logger.warn(
-      { err: err instanceof Error ? err.message : String(err) },
+      { jobId, outcome, err: err instanceof Error ? err.message : String(err) },
       'poster: safeScreenshot threw',
     );
     return null;

@@ -153,17 +153,34 @@ async function runJob(jobPayload: JobPayload, settings: WorkerSettings): Promise
       jobId: job.id,
     });
 
+    // Iter6 — verbose tracing on the screenshot upload pipeline because
+    // bug #8 manifested as silent disappearance: subsequent jobs after
+    // the first showed neither "saved" nor "upload failed" in the log.
+    // We now log every branch: have-path / no-path / upload-ok / upload-fail.
     let screenshotUrl: string | undefined;
     if (result.screenshotPath) {
+      logger.info(
+        { jobId: job.id, screenshotPath: result.screenshotPath, success: result.success },
+        'main-loop: uploading screenshot',
+      );
       try {
         const uploaded = await uploadScreenshot(result.screenshotPath);
         screenshotUrl = uploaded.url;
+        logger.info(
+          { jobId: job.id, screenshotUrl: uploaded.url },
+          'main-loop: screenshot uploaded',
+        );
       } catch (err) {
         logger.warn(
-          { err, jobId: job.id },
+          { err: err instanceof Error ? err.message : String(err), jobId: job.id },
           'main-loop: screenshot upload failed, reporting without URL',
         );
       }
+    } else {
+      logger.info(
+        { jobId: job.id, success: result.success },
+        'main-loop: no screenshotPath on result — skipping upload',
+      );
     }
 
     await reportResult(job.id, {

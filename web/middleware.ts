@@ -17,6 +17,10 @@ const PUBLIC_API_PREFIXES = [
 
 const PUBLIC_UI_PREFIXES = [
   '/auth', // sign-in, error, etc.
+  '/l', // public shortlink redirects — these must reach the handler
+        //      without requiring a session, otherwise every click would
+        //      bounce through /auth/signin and the user would never reach
+        //      the target URL.
 ];
 
 /** Static / framework paths that must never be intercepted. */

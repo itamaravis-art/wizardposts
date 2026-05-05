@@ -192,9 +192,9 @@ export default function SettingsPage() {
                   value={form.daily_cap}
                   onChange={(v) => update('daily_cap', v)}
                   min={1}
-                  max={50}
+                  max={100}
                   unit="פוסטים ביום"
-                  help="המספר המרבי של פרסומים ביום עבודה."
+                  help="המספר המרבי של פרסומים ביום עבודה. שמור על הקצב נמוך — מעל 50 ביום מעלה משמעותית את הסיכון להגבלת חשבון."
                 />
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <SliderField

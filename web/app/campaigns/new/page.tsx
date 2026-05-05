@@ -744,9 +744,9 @@ function StepSettings({
           value={dailyCap}
           onChange={setDailyCap}
           min={1}
-          max={50}
+          max={100}
           unit="פוסטים ביום"
-          help="כמה פוסטים מקסימום יישלחו ביום עבודה אחד."
+          help="כמה פוסטים מקסימום יישלחו ביום עבודה אחד. מעל 50 — סיכון מוגבר להגבלת חשבון."
           error={errors.cap}
         />
 

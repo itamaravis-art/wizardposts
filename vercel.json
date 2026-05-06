@@ -1,0 +1,25 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/cron/generate",
+      "schedule": "0 22 * * *"
+    },
+    {
+      "path": "/api/cron/publish",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/skip-stale",
+      "schedule": "30 9 * * *"
+    },
+    {
+      "path": "/api/cron/notify-pending",
+      "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/cron/refresh-tokens",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}

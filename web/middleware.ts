@@ -13,6 +13,7 @@ const PUBLIC_API_PREFIXES = [
   '/api/auth', // NextAuth's own routes
   '/api/worker', // bearer-token authenticated separately in the route
   '/api/health', // liveness probe
+  '/api/cron', // CRON_SECRET-bearer authenticated in each route
 ];
 
 const PUBLIC_UI_PREFIXES = [

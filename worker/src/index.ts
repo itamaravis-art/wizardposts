@@ -19,7 +19,11 @@ import { startMainLoop, requestStop } from './main-loop.js';
  */
 function acquireSingletonLock(): void {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const lockPath = path.resolve(here, '..', '..', '.worker.lock');
+  // Lock lives INSIDE the worker dir (worker/.worker.lock), not the
+  // parent. On the home install at `C:\wizardposts-worker\`, going up
+  // two levels lands at `C:\` which is UAC-protected → EPERM crash.
+  // One level up from `src/` = the worker root, always writable.
+  const lockPath = path.resolve(here, '..', '.worker.lock');
   if (fs.existsSync(lockPath)) {
     try {
       const otherPid = parseInt(fs.readFileSync(lockPath, 'utf8').trim(), 10);

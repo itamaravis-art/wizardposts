@@ -24,7 +24,19 @@ export const runtime = 'nodejs';
 
 const bodySchema = z.object({
   success: z.boolean(),
-  message: z.string().max(2000).nullable().optional(),
+  // Bug #10 (iter7) — match the PATCH endpoint: accept up to 10k and
+  // auto-truncate instead of rejecting at 2000. Playwright call-log
+  // traces often exceed the old cap.
+  message: z
+    .string()
+    .max(10_000)
+    .transform((s) =>
+      s.length > 1900
+        ? `${s.slice(0, 1500)}\n\n... [truncated, original length ${s.length}]`
+        : s,
+    )
+    .nullable()
+    .optional(),
   screenshotUrl: z.string().url().nullable().optional(),
   // Optional classification of the failure (e.g. "captcha", "rate_limited",
   // "checkpoint", "post_blocked"). The query helper uses this to decide

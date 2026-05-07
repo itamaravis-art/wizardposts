@@ -46,6 +46,7 @@ export type FailureKind =
   | 'network_error'        // navigation/connectivity flake
   | 'image_missing'        // local image path invalid
   | 'submit_failed'        // composer opened but post button never clicked
+  | 'submit_blocked'       // submit button intercepted by overlay/tooltip — Bug #9 iter7
   | 'unknown';
 
 /**
@@ -58,6 +59,9 @@ export const TRANSIENT_FAILURE_KINDS: ReadonlySet<FailureKind> = new Set([
   'composer_not_found',
   'composer_no_textbox',
   'network_error',
+  // submit_blocked is overlay-shaped (FB sticky banner / tooltip) — not a
+  // permanent permission/captcha problem. Don't pause the campaign over it.
+  'submit_blocked',
 ]);
 
 export interface PostToGroupResult {
@@ -148,6 +152,70 @@ async function safeScreenshot(
     );
     return null;
   }
+}
+
+/**
+ * After clicking submit, FB sometimes shows a toast/notice when the group has
+ * admin approval enabled — variants observed in Hebrew and English:
+ *   - "Pending approval"
+ *   - "Your post is pending approval"
+ *   - "Pending review by group admins"
+ *   - "הפוסט שלך ממתין לאישור"
+ *   - "ממתין לאישור"
+ *   - "הפוסט שלך ממתין לאישור מנהל הקבוצה"
+ *
+ * This runs RIGHT AFTER submit returns. We give it a short window (5s) to
+ * appear — false negatives are OK (we'll just call it "Posted successfully"
+ * when we can't tell), false positives are not (would mark a real post as
+ * pending). The phrases are specific enough not to collide with other UI.
+ */
+async function detectPendingApproval(page: Page): Promise<boolean> {
+  const phrases = [
+    'pending approval',
+    'pending admin approval',
+    'pending review',
+    'awaiting approval',
+    'will be visible after approval',
+    'ממתין לאישור',
+    'ממתינ', // catches "ממתין/ממתינה/ממתינים"
+    'ממתינה לאישור',
+    'הפוסט שלך ממתין',
+    'אישור מנהל',
+    'מחכה לאישור',
+  ];
+  // Compose a single regex of escaped alternatives to avoid N round-trips.
+  const re = new RegExp(
+    phrases.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
+    'i',
+  );
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      const found = await page.evaluate((pattern: string) => {
+        const r = new RegExp(pattern, 'i');
+        // Look for visible toast/banner-ish elements only (small text blobs).
+        const candidates = Array.from(document.querySelectorAll('div, span'));
+        for (const el of candidates) {
+          const text = (el.textContent || '').trim();
+          if (!text || text.length > 200) continue;
+          if (!r.test(text)) continue;
+          const rect = (el as HTMLElement).getBoundingClientRect();
+          if (rect.width < 40 || rect.height < 16) continue;
+          if (rect.bottom < 0 || rect.top > (window.innerHeight || 800)) continue;
+          return text.slice(0, 120);
+        }
+        return null;
+      }, re.source);
+      if (found) {
+        logger.info({ phrase: found.slice(0, 80) }, 'poster: detected pending-approval toast');
+        return true;
+      }
+    } catch {
+      /* retry */
+    }
+    await sleep(500);
+  }
+  return false;
 }
 
 async function findFirstVisible(
@@ -934,7 +1002,49 @@ export async function postToGroup(opts: PostToGroupOpts): Promise<PostToGroupRes
       return { success: false, message: msg, screenshotPath, kind: 'submit_failed' };
     }
 
-    await submitBtn.click({ delay: randomBetween(40, 120) });
+    // Bug #9 (iter7) — FB sometimes layers an overlay div on top of the
+    // submit button (notification banners, sticky headers, tooltips).
+    // The default click waits for pointer-events to be free; that wait
+    // never resolves and we time out at 30s, scoring ~90 consecutive
+    // failures. Approach: scroll into view, click with force:true on a
+    // 5s budget, fall back to Ctrl+Enter (FB composer accepts it).
+    await submitBtn.scrollIntoViewIfNeeded().catch(() => {});
+    let submitted = false;
+    let submitErrMsg = '';
+    try {
+      await submitBtn.click({ force: true, timeout: 5000, delay: randomBetween(40, 120) });
+      submitted = true;
+    } catch (clickErr) {
+      submitErrMsg = clickErr instanceof Error ? clickErr.message : String(clickErr);
+      logger.warn(
+        { jobId, err: submitErrMsg.slice(0, 200) },
+        'poster: forced submit click failed, trying Ctrl+Enter fallback',
+      );
+      try {
+        await textbox.focus();
+        await page.keyboard.press('Control+Enter');
+        submitted = true;
+      } catch (kbErr) {
+        const kbErrMsg = kbErr instanceof Error ? kbErr.message : String(kbErr);
+        logger.warn(
+          { jobId, err: kbErrMsg.slice(0, 200) },
+          'poster: Ctrl+Enter fallback also failed',
+        );
+      }
+    }
+
+    if (!submitted) {
+      const screenshotPath = await safeScreenshot(page, screenshotDir, jobId, 'fail');
+      const msg =
+        'Submit button blocked by overlay (pointer-events intercept) — neither force-click nor Ctrl+Enter worked';
+      logger.warn({ jobId, originalErr: submitErrMsg.slice(0, 300) }, `poster: ${msg}`);
+      return {
+        success: false,
+        message: msg,
+        screenshotPath,
+        kind: 'submit_blocked',
+      };
+    }
 
     await Promise.race([
       textbox.waitFor({ state: 'hidden', timeout: 30000 }).catch(() => {}),
@@ -958,6 +1068,20 @@ export async function postToGroup(opts: PostToGroupOpts): Promise<PostToGroupRes
     }
 
     const screenshotPath = await safeScreenshot(page, screenshotDir, jobId, 'success');
+
+    // Detect "Pending moderator approval" — FB shows a toast/notice after
+    // submit when the group has admin-approval enabled. Without this check
+    // we'd return success even though the post never becomes visible.
+    const pendingApproval = await detectPendingApproval(page).catch(() => false);
+    if (pendingApproval) {
+      logger.info({ jobId, groupUrl }, 'poster: post submitted — pending moderator approval');
+      return {
+        success: true,
+        message: 'Pending moderator approval',
+        screenshotPath,
+      };
+    }
+
     logger.info({ jobId, groupUrl }, 'poster: post submitted successfully');
     return {
       success: true,

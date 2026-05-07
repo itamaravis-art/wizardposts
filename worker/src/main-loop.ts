@@ -8,15 +8,19 @@ import {
   reportResult,
   setConnectionStatus,
   uploadScreenshot,
+  getNextRecheck,
+  reportRecheck,
   WorkerHttpError,
   type WorkerSettings,
   type JobPayload,
 } from './api-client.js';
+import path from 'node:path';
+import fs from 'node:fs';
 import { logger } from './utils/logger.js';
 import { SCREENSHOTS_DIR } from './utils/paths.js';
 import { downloadImageToTemp, safeUnlink } from './utils/download.js';
 import { launchBrowser, closeBrowser as closeLauncher } from './browser/launcher.js';
-import { getOrCreatePage, isLoggedIn } from './browser/session.js';
+import { getOrCreatePage, isLoggedIn, getLoggedInUserName } from './browser/session.js';
 import { postToGroup, type FailureKind } from './poster/poster.js';
 
 const POLL_INTERVAL_MS = 8000;
@@ -44,6 +48,10 @@ const COOLDOWN_BY_KIND: Record<FailureKind, number> = {
   fb_blocked: 3_600_000,
   network_error: 30_000,
   submit_failed: 300_000,
+  // Bug #9 iter7 — overlay intercepts submit click. Sometimes the
+  // overlay clears within minutes (FB notification banner auto-dismiss).
+  // 10 min keeps it transient without hammering FB.
+  submit_blocked: 600_000,
   image_missing: 300_000,
   unknown: 300_000,
 };
@@ -127,6 +135,25 @@ async function runJob(jobPayload: JobPayload, settings: WorkerSettings): Promise
       return { ok: false, kind: 'login_required' };
     }
 
+    // We just verified the worker is logged in. Make sure the cloud DB
+    // reflects that — the dashboard "Connected / Not connected" banner
+    // reads `users.fb_connected`, and that flag could have been flipped
+    // to false on a previous transient mis-detection. Setting it on
+    // every confirmed-login is cheap (~tens of ms) and keeps the UI
+    // honest. Best-effort — don't fail the job if the call hiccups.
+    {
+      const userName = await getLoggedInUserName(page).catch(() => null);
+      await setConnectionStatus({
+        connected: true,
+        ...(userName ? { userName } : {}),
+      }).catch((err) =>
+        logger.warn(
+          { err: err instanceof Error ? err.message : String(err) },
+          'main-loop: failed to mark fb_connected=true',
+        ),
+      );
+    }
+
     if (post.image_url) {
       try {
         imagePath = await downloadImageToTemp(post.image_url);
@@ -198,6 +225,104 @@ async function runJob(jobPayload: JobPayload, settings: WorkerSettings): Promise
   }
 }
 
+/**
+ * Take a single fresh screenshot of a previously-pending group so the
+ * cloud GPT-4o classifier can decide whether the admin has approved
+ * the post. Best-effort — failures are logged and swallowed so they
+ * don't disrupt the regular posting loop.
+ */
+async function tryOneRecheck(): Promise<void> {
+  let task;
+  try {
+    task = await getNextRecheck();
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'recheck: getNextRecheck failed; skipping',
+    );
+    return;
+  }
+  if (!task) return;
+
+  logger.info(
+    { jobId: task.jobId, groupUrl: task.groupUrl, lastRecheckedAt: task.lastRecheckedAt },
+    'recheck: visiting group to verify admin approval',
+  );
+
+  let browserCtx: BrowserContext;
+  try {
+    browserCtx = await ensureBrowser();
+  } catch (err) {
+    logger.warn({ err }, 'recheck: failed to launch browser; skipping');
+    return;
+  }
+
+  try {
+    const page = await getOrCreatePage(browserCtx);
+    if (!(await isLoggedIn(page))) {
+      logger.info({ jobId: task.jobId }, 'recheck: not logged in to FB, skipping');
+      return;
+    }
+
+    await page.goto(task.groupUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+    await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+    // Give the feed a beat to mount and scroll a bit so the latest
+    // posts are in viewport.
+    await page.waitForTimeout(2000);
+    await page.evaluate(() => window.scrollTo(0, 600)).catch(() => {});
+    await page.waitForTimeout(1500);
+
+    fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+    const file = path.join(SCREENSHOTS_DIR, `recheck-${task.jobId}-${Date.now()}.png`);
+    let buf: Buffer;
+    try {
+      buf = await page.screenshot({ fullPage: false, timeout: 8000 });
+    } catch (err) {
+      logger.warn({ err, jobId: task.jobId }, 'recheck: screenshot threw');
+      return;
+    }
+    if (!buf || buf.length === 0) {
+      logger.warn({ jobId: task.jobId }, 'recheck: empty screenshot buffer');
+      return;
+    }
+    await fs.promises.writeFile(file, buf);
+    logger.info(
+      { jobId: task.jobId, file, sizeBytes: buf.length },
+      'recheck: screenshot captured, uploading',
+    );
+
+    let screenshotUrl: string | null = null;
+    try {
+      const uploaded = await uploadScreenshot(file);
+      screenshotUrl = uploaded.url;
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err), jobId: task.jobId },
+        'recheck: upload failed',
+      );
+      return;
+    } finally {
+      safeUnlink(file);
+    }
+    if (!screenshotUrl) return;
+
+    try {
+      await reportRecheck(task.jobId, screenshotUrl);
+      logger.info({ jobId: task.jobId, screenshotUrl }, 'recheck: cloud classifier invoked');
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err), jobId: task.jobId },
+        'recheck: report-recheck call failed',
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err), jobId: task.jobId },
+      'recheck: unexpected error',
+    );
+  }
+}
+
 export async function startMainLoop(): Promise<void> {
   const workerName = process.env.WORKER_NAME || os.hostname();
   logger.info({ workerName }, 'main-loop: starting');
@@ -224,6 +349,10 @@ export async function startMainLoop(): Promise<void> {
 
       const job = await getNextJob();
       if (!job) {
+        // No regular post pending — try a recheck of a previously
+        // pending-moderator-approval job. One per cycle keeps load
+        // off Facebook and gives admins time between visits.
+        await tryOneRecheck();
         await sleep(POLL_INTERVAL_MS);
         continue;
       }

@@ -106,6 +106,7 @@ export interface ReportResultPayload {
     | 'network_error'
     | 'image_missing'
     | 'submit_failed'
+    | 'submit_blocked'
     | 'unknown';
 }
 
@@ -302,16 +303,36 @@ export async function getNextJob(): Promise<JobPayload | null> {
  * case and JSON `{ error: ... }` in the not-found case), we fall back to the
  * POST endpoint that the cloud has always supported.
  */
+/**
+ * Bug #10 (iter7) — Playwright errors include the entire 56-retry call
+ * log (~2000+ chars). The cloud's Zod validator caps `message` at 2000
+ * which means we silently drop the entire status update for failed
+ * jobs and the dashboard never shows them. Truncate to a safe ceiling
+ * client-side; keep the head (the actual error message) and append a
+ * marker so we know the original was longer.
+ */
+const MAX_MESSAGE_LENGTH = 1900;
+function truncateMessage(message: string): string {
+  if (message.length <= MAX_MESSAGE_LENGTH) return message;
+  const head = message.substring(0, 1500);
+  return `${head}\n\n... [truncated, original length ${message.length}]`;
+}
+
 export async function reportResult(
   jobId: string,
   payload: ReportResultPayload,
 ): Promise<void> {
   const id = encodeURIComponent(jobId);
+  // Truncate before send so the cloud Zod validator doesn't 400 the request.
+  const safePayload: ReportResultPayload = {
+    ...payload,
+    message: truncateMessage(payload.message),
+  };
   try {
     await apiFetch<unknown>({
       method: 'PATCH',
       pathname: `/api/worker/jobs/${id}`,
-      body: payload,
+      body: safePayload,
     });
     return;
   } catch (err) {
@@ -333,7 +354,46 @@ export async function reportResult(
   await apiFetch<unknown>({
     method: 'POST',
     pathname: `/api/worker/jobs/${id}/result`,
-    body: payload,
+    body: safePayload,
+  });
+}
+
+export interface RecheckTask {
+  jobId: string;
+  groupUrl: string;
+  finishedAt: string | null;
+  lastRecheckedAt: string | null;
+}
+
+/**
+ * Pull the next pending-moderator-approval job to re-verify. Returns
+ * null when nothing's eligible.
+ */
+export async function getNextRecheck(): Promise<RecheckTask | null> {
+  try {
+    const res = await apiFetch<RecheckTask | null>({
+      method: 'GET',
+      pathname: '/api/worker/next-recheck',
+    });
+    if (!res || !res.jobId) return null;
+    return res;
+  } catch (err) {
+    // Older deployments without the route → just skip rechecks.
+    if (err instanceof WorkerHttpError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+/**
+ * Report a fresh recheck screenshot. The cloud GPT-4o classifier
+ * decides whether the post is now visible (admin approved), still
+ * pending, or rejected.
+ */
+export async function reportRecheck(jobId: string, screenshotUrl: string): Promise<void> {
+  await apiFetch<unknown>({
+    method: 'POST',
+    pathname: '/api/worker/report-recheck',
+    body: { jobId, screenshotUrl },
   });
 }
 

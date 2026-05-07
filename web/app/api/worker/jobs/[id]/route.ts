@@ -20,7 +20,19 @@ export const runtime = 'nodejs';
 
 const bodySchema = z.object({
   success: z.boolean(),
-  message: z.string().max(2000).nullable().optional(),
+  // Bug #10 (iter7) — Playwright stack traces with full retry call logs
+  // routinely exceed the old 2000-char cap, causing a 400 that silently
+  // drops the status update. Accept up to 10k and auto-truncate.
+  message: z
+    .string()
+    .max(10_000)
+    .transform((s) =>
+      s.length > 1900
+        ? `${s.slice(0, 1500)}\n\n... [truncated, original length ${s.length}]`
+        : s,
+    )
+    .nullable()
+    .optional(),
   screenshotUrl: z.string().url().nullable().optional(),
   blockerKind: z.string().max(40).nullable().optional(),
   // Worker tells us *why* the job failed. The DB layer uses this to decide

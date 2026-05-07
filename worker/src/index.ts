@@ -3,9 +3,55 @@
 
 import 'dotenv/config'; // optional: lets npm run dev pick up .env automatically
 import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { logger } from './utils/logger.js';
 import { heartbeat, WorkerHttpError } from './api-client.js';
 import { startMainLoop, requestStop } from './main-loop.js';
+
+/**
+ * Singleton lock — refuse to start a second worker against the same
+ * Chromium user-data-dir. Two workers fighting over `data/session`
+ * each spawn a Chromium that fails to lock the dir, the next launch
+ * crashes, and the error loop opens dozens of orphan about:blank tabs.
+ * The lock here makes that impossible.
+ */
+function acquireSingletonLock(): void {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const lockPath = path.resolve(here, '..', '..', '.worker.lock');
+  if (fs.existsSync(lockPath)) {
+    try {
+      const otherPid = parseInt(fs.readFileSync(lockPath, 'utf8').trim(), 10);
+      if (Number.isFinite(otherPid) && otherPid > 0) {
+        try {
+          // process.kill(pid, 0) throws if PID is dead, no-op if alive.
+          process.kill(otherPid, 0);
+          // eslint-disable-next-line no-console
+          console.error(
+            `Another worker (PID ${otherPid}) is already running — refusing to start. ` +
+              `Stop it first, or delete ${lockPath} if you're sure it's stale.`,
+          );
+          process.exit(3);
+        } catch {
+          logger.info({ stalePid: otherPid }, 'startup: removing stale worker lock');
+        }
+      }
+    } catch {
+      /* unreadable lock — overwrite */
+    }
+  }
+  fs.writeFileSync(lockPath, String(process.pid));
+  const release = () => {
+    try {
+      const pidIn = parseInt(fs.readFileSync(lockPath, 'utf8').trim(), 10);
+      if (pidIn === process.pid) fs.unlinkSync(lockPath);
+    } catch {
+      /* best-effort */
+    }
+  };
+  process.on('exit', release);
+}
 
 function ensureEnv(): void {
   const missing: string[] = [];
@@ -51,6 +97,7 @@ async function validateToken(): Promise<void> {
 
 async function main(): Promise<void> {
   ensureEnv();
+  acquireSingletonLock();
   logger.info('worker: starting');
 
   await validateToken();

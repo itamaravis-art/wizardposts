@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { logger } from './utils/logger.js';
 import { heartbeat, WorkerHttpError } from './api-client.js';
 import { startMainLoop, requestStop } from './main-loop.js';
+import { startScheduler, requestStopScheduler } from './scheduled-tasks.js';
 
 /**
  * Singleton lock — refuse to start a second worker against the same
@@ -109,6 +110,7 @@ async function main(): Promise<void> {
   const shutdown = (signal: NodeJS.Signals): void => {
     logger.info({ signal }, 'worker: shutdown signal received');
     requestStop();
+    requestStopScheduler();
     // Give the loop ~10s to finish the current iteration; force-exit otherwise.
     setTimeout(() => {
       logger.warn('worker: forced exit after grace period');
@@ -117,6 +119,12 @@ async function main(): Promise<void> {
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+
+  // Run the cron scheduler alongside the main posting loop. The
+  // scheduler pings `/api/cron/*` endpoints itself so we don't depend
+  // on Vercel Hobby's flaky cron service. Returning promise is fired
+  // and forgotten on purpose — main-loop is the foreground task.
+  void startScheduler();
 
   await startMainLoop();
   process.exit(0);

@@ -51,92 +51,111 @@ export async function GET(req: NextRequest) {
   if (!isAuthorizedCron(req)) return cronUnauthorized();
 
   const startedAt = Date.now();
-  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  // Default target = tomorrow (the cron's intent: nightly run preps the
+  // next day's posts). `?date=YYYY-MM-DD` lets us backfill missed days
+  // (e.g. when the cron itself fails to fire).
+  const dateOverride = req.nextUrl.searchParams.get('date');
+  const tomorrow = dateOverride
+    ? new Date(`${dateOverride}T12:00:00Z`)
+    : new Date(Date.now() + 24 * 60 * 60 * 1000);
+  // Optional ?slot=HH:mm filter so a single function invocation only
+  // produces one slot — keeps each call comfortably under Vercel's 60s
+  // function ceiling on Hobby. The two daily cron entries in
+  // vercel.json each pin themselves to one slot.
+  const slotFilter = req.nextUrl.searchParams.get('slot') || null;
   const pages = await listActivePagesWithTokens();
   const results: PageResult[] = [];
 
   for (const page of pages) {
     const brandKit = page.brandKit as BrandKit;
-    const slots = getAllPillarsForDate(tomorrow, brandKit);
+    const allSlots = getAllPillarsForDate(tomorrow, brandKit);
+    const slots = slotFilter
+      ? allSlots.filter((s) => s.slot === slotFilter)
+      : allSlots;
     const pageRes: PageResult = {
       pageId: page.id,
       pageName: page.pageName,
       slots: [],
     };
 
-    for (const { slot, pillar } of slots) {
-      if (!pillar) {
-        pageRes.slots.push({ slot, pillar: null, ok: true });
-        continue; // intentional skip slot
-      }
+    // Process all slots for this page in parallel — each slot is an
+    // independent OpenAI roundtrip + Supabase upload + DB insert. Two
+    // sequential slots blew Vercel's 60s function ceiling once the
+    // image-prompt got richer; running them concurrently halves wall
+    // time and keeps total well under the limit.
+    const slotResults = await Promise.all(
+      slots.map(async ({ slot, pillar }): Promise<SlotResult> => {
+        if (!pillar) {
+          return { slot, pillar: null, ok: true };
+        }
 
-      // Idempotence guard: skip if a post already exists for this
-      // (page, scheduledAt). Prevents double-generation if the cron
-      // fires twice (Vercel rare retries).
-      const scheduledAt = dateAtSlot(tomorrow, slot);
-      const existing = await db
-        .select({ id: posts.id })
-        .from(posts)
-        .where(
-          sql`${posts.channel} = 'page' AND ${posts.pageId} = ${page.id} AND ${posts.scheduledAt} = ${scheduledAt}`,
-        )
-        .limit(1);
-      if (existing.length > 0) {
-        pageRes.slots.push({
-          slot,
-          pillar,
-          ok: true,
-          postId: existing[0]!.id,
-          error: 'already-generated',
-        });
-        continue;
-      }
+        // Idempotence guard: skip if a post already exists for this
+        // (page, scheduledAt). Prevents double-generation if the cron
+        // fires twice (Vercel rare retries).
+        const scheduledAt = dateAtSlot(tomorrow, slot);
+        const scheduledAtIso = scheduledAt.toISOString();
+        const existing = await db
+          .select({ id: posts.id })
+          .from(posts)
+          .where(
+            sql`${posts.channel} = 'page' AND ${posts.pageId} = ${page.id} AND ${posts.scheduledAt} = ${scheduledAtIso}::timestamptz`,
+          )
+          .limit(1);
+        if (existing.length > 0) {
+          return {
+            slot,
+            pillar,
+            ok: true,
+            postId: existing[0]!.id,
+            error: 'already-generated',
+          };
+        }
 
-      try {
-        const captions = await generateCaptions({ pillar, brandKit, count: 3 });
-        // Use the first caption for image-prompt context (we don't have
-        // a postId yet — generate uses a temp uuid, then we update on
-        // the row insert).
-        const tempPostId = crypto.randomUUID();
-        const { url, prompt } = await generateImage({
-          pillar,
-          brandKit,
-          caption: captions[0]!,
-          pageId: page.id,
-          postId: tempPostId,
-        });
+        try {
+          const captions = await generateCaptions({ pillar, brandKit, count: 3 });
+          const tempPostId = crypto.randomUUID();
+          const { url, prompt } = await generateImage({
+            pillar,
+            brandKit,
+            caption: captions[0]!,
+            pageId: page.id,
+            postId: tempPostId,
+          });
 
-        const created = await createPagePost({
-          userId: page.userId,
-          pageId: page.id,
-          initialText: captions[0]!,
-          captionVariants: captions,
-          imageUrl: url,
-          imagePrompt: prompt,
-          scheduledAt,
-        });
+          const created = await createPagePost({
+            userId: page.userId,
+            pageId: page.id,
+            initialText: captions[0]!,
+            captionVariants: captions,
+            imageUrl: url,
+            imagePrompt: prompt,
+            scheduledAt,
+          });
 
-        pageRes.slots.push({ slot, pillar, ok: true, postId: created.id });
-        await addLog({
-          userId: page.userId,
-          level: 'info',
-          source: 'page-generate-cron',
-          message: `generated post for ${pillar} @ ${slot}`,
-          meta: { pageId: page.id, postId: created.id, pillar, slot },
-        }).catch(() => {});
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        pageRes.slots.push({ slot, pillar, ok: false, error: message });
-        await addLog({
-          userId: page.userId,
-          level: 'error',
-          source: 'page-generate-cron',
-          message: `generation failed for ${pillar} @ ${slot}`,
-          meta: { pageId: page.id, pillar, slot, error: message },
-        }).catch(() => {});
-      }
-    }
+          await addLog({
+            userId: page.userId,
+            level: 'info',
+            source: 'page-generate-cron',
+            message: `generated post for ${pillar} @ ${slot}`,
+            meta: { pageId: page.id, postId: created.id, pillar, slot },
+          }).catch(() => {});
 
+          return { slot, pillar, ok: true, postId: created.id };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await addLog({
+            userId: page.userId,
+            level: 'error',
+            source: 'page-generate-cron',
+            message: `generation failed for ${pillar} @ ${slot}`,
+            meta: { pageId: page.id, pillar, slot, error: message },
+          }).catch(() => {});
+          return { slot, pillar, ok: false, error: message };
+        }
+      }),
+    );
+
+    pageRes.slots = slotResults;
     results.push(pageRes);
   }
 

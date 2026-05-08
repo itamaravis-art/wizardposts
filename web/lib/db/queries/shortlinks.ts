@@ -12,7 +12,7 @@
  *
  * The redirect endpoint /l/<slug> resolves either form by slug.
  */
-import { and, desc, eq, isNull, sql, count } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql, count, inArray } from 'drizzle-orm';
 import { db } from '../index';
 import {
   shortlinks,
@@ -378,6 +378,11 @@ export async function ensureChildShortlinksForGroups(
   if (parentSlugs.length === 0) return {};
 
   // Find parent rows owned by this user that are still active.
+  // Drizzle+postgres-js serializes JS arrays oddly with `ANY(${arr})`
+  // (it ends up sending a single string instead of a PG array, hence
+  // the historical "malformed array literal" silent failure that
+  // blocked all per-group attribution). Use drizzle's `inArray` which
+  // emits a real `IN (...)` clause and round-trips arrays correctly.
   const parents = await db
     .select()
     .from(shortlinks)
@@ -385,7 +390,7 @@ export async function ensureChildShortlinksForGroups(
       and(
         eq(shortlinks.userId, userId),
         eq(shortlinks.isActive, true),
-        sql`${shortlinks.slug} = ANY(${parentSlugs})`,
+        inArray(shortlinks.slug, parentSlugs),
         isNull(shortlinks.parentId),
       ),
     );
@@ -397,8 +402,8 @@ export async function ensureChildShortlinksForGroups(
     .from(shortlinks)
     .where(
       and(
-        sql`${shortlinks.parentId} = ANY(${parents.map((p) => p.id)})`,
-        sql`${shortlinks.groupId} = ANY(${groupIds})`,
+        inArray(shortlinks.parentId, parents.map((p) => p.id)),
+        inArray(shortlinks.groupId, groupIds),
       ),
     );
 

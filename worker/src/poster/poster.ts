@@ -170,25 +170,46 @@ async function safeScreenshot(
  * pending). The phrases are specific enough not to collide with other UI.
  */
 async function detectPendingApproval(page: Page): Promise<boolean> {
+  // Phrasing observed in production via GPT-4o vision on saved
+  // screenshots — FB's actual toast says "Thanks for your post! It's
+  // been submitted to group admins for approval" / "for review", which
+  // didn't match my original short patterns. Adding the substrings
+  // that consistently appear so we catch the toast at submit time
+  // instead of relying on the cron-driven recheck.
   const phrases = [
     'pending approval',
     'pending admin approval',
     'pending review',
     'awaiting approval',
     'will be visible after approval',
+    'submitted to group admins',
+    'submitted to admins',
+    'submitted for approval',
+    'submitted for review',
+    'thanks for your post',
+    "it's been submitted",
+    'has been submitted',
+    'waiting for admin',
+    'group admin must approve',
     'ממתין לאישור',
     'ממתינ', // catches "ממתין/ממתינה/ממתינים"
     'ממתינה לאישור',
     'הפוסט שלך ממתין',
     'אישור מנהל',
     'מחכה לאישור',
+    'נשלח לאישור',
+    'הוגש לאישור',
+    'תודה על הפוסט',
+    'יוצג לאחר אישור',
   ];
   // Compose a single regex of escaped alternatives to avoid N round-trips.
   const re = new RegExp(
     phrases.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
     'i',
   );
-  const deadline = Date.now() + 5000;
+  // 8s window (was 5s) — observed cases where toast appeared ~6s after
+  // submit on slow connections. Polling cost is trivial.
+  const deadline = Date.now() + 8000;
   while (Date.now() < deadline) {
     try {
       const found = await page.evaluate((pattern: string) => {

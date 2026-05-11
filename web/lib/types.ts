@@ -16,6 +16,10 @@ export interface Post {
   image_url?: string | null;
   /** Legacy local version: filesystem path. */
   image_path?: string | null;
+  /** Optional short-video URL (Supabase public URL). */
+  videoUrl?: string | null;
+  /** Snake-case alias. */
+  video_url?: string | null;
   created_at?: ISODate;
   createdAt?: ISODate;
 }

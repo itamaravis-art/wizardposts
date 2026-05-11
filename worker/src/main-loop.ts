@@ -40,20 +40,22 @@ const PAUSE_AFTER_NO_LOGIN_MS = 60_000;
  *   - submit_failed / image_missing: 5 min — could be local issue.
  *   - unknown: 5 min — default safe value.
  */
+// iter11 — cooldowns tuned down. Field data showed the worker losing an
+// hour on a single `fb_blocked` false-positive (a perfectly normal post
+// got classified as blocked because of a transient FB UI quirk). Keep
+// the safety margins generous on real blocks but stop wasting time on
+// one-shot misclassifications.
 const COOLDOWN_BY_KIND: Record<FailureKind, number> = {
-  composer_not_found: 600_000,
-  composer_no_textbox: 480_000,
+  composer_not_found: 300_000,    // 5 min (was 10) — DOM drift usually self-heals
+  composer_no_textbox: 300_000,   // 5 min (was 8)
   login_required: 0,
   group_no_permission: 5_000,
-  fb_blocked: 3_600_000,
+  fb_blocked: 900_000,            // 15 min (was 60) — real captchas need a re-login anyway, no point hammering
   network_error: 30_000,
-  submit_failed: 300_000,
-  // Bug #9 iter7 — overlay intercepts submit click. Sometimes the
-  // overlay clears within minutes (FB notification banner auto-dismiss).
-  // 10 min keeps it transient without hammering FB.
-  submit_blocked: 600_000,
+  submit_failed: 180_000,         // 3 min (was 5)
+  submit_blocked: 300_000,        // 5 min (was 10) — overlay usually clears in <1 min
   image_missing: 300_000,
-  unknown: 300_000,
+  unknown: 180_000,               // 3 min (was 5)
 };
 
 let stopRequested = false;

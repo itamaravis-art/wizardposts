@@ -38,6 +38,12 @@ function imageSrc(p: { imageUrl?: string | null; image_path?: string | null } | 
   return null;
 }
 
+/** Returns the video URL if the post has one. */
+function videoSrc(p: { videoUrl?: string | null; video_url?: string | null } | null | undefined): string | null {
+  if (!p) return null;
+  return p.videoUrl ?? p.video_url ?? null;
+}
+
 export default function PostsPage() {
   const router = useRouter();
   const [posts, setPosts] = useState<Post[]>([]);
@@ -147,6 +153,7 @@ export default function PostsPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((p) => {
             const src = imageSrc(p);
+            const vsrc = videoSrc(p);
             return (
               <Card
                 key={p.id}
@@ -159,7 +166,24 @@ export default function PostsPage() {
                   className="block w-full text-right focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50"
                   aria-label="הצג תצוגה מקדימה"
                 >
-                  {src ? (
+                  {vsrc ? (
+                    <div className="relative h-40 bg-black overflow-hidden">
+                      <video
+                        src={vsrc}
+                        muted
+                        playsInline
+                        preload="metadata"
+                        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+                      />
+                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                        <div className="bg-black/50 rounded-full p-3">
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
+                            <path d="M8 5v14l11-7z" />
+                          </svg>
+                        </div>
+                      </div>
+                    </div>
+                  ) : src ? (
                     <div className="relative h-40 bg-slate-100 overflow-hidden">
                       <img
                         src={src}
@@ -257,7 +281,14 @@ export default function PostsPage() {
       >
         {previewPost && (
           <div className="space-y-3">
-            {imageSrc(previewPost) && (
+            {videoSrc(previewPost) ? (
+              <video
+                src={videoSrc(previewPost)!}
+                controls
+                playsInline
+                className="w-full max-h-96 object-contain rounded-lg bg-black"
+              />
+            ) : imageSrc(previewPost) && (
               <img
                 src={imageSrc(previewPost)!}
                 alt=""

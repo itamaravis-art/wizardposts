@@ -12,6 +12,13 @@ const EXT_BY_MIME: Record<string, string> = {
   'image/png': '.png',
   'image/webp': '.webp',
   'image/gif': '.gif',
+  // Short videos — uploaded via the same `imagePath` slot in poster.ts;
+  // Playwright's setInputFiles doesn't care about the extension as long
+  // as the content matches FB's accept filter.
+  'video/mp4': '.mp4',
+  'video/quicktime': '.mov',
+  'video/webm': '.webm',
+  'video/x-m4v': '.m4v',
 };
 
 function safeRandomBase(): string {
@@ -25,7 +32,7 @@ function inferExt(url: string, contentType: string | null): string {
   }
   try {
     const u = new URL(url);
-    const m = u.pathname.match(/\.(jpe?g|png|webp|gif)$/i);
+    const m = u.pathname.match(/\.(jpe?g|png|webp|gif|mp4|mov|webm|m4v)$/i);
     if (m) return `.${m[1]!.toLowerCase().replace('jpeg', 'jpg')}`;
   } catch {
     /* ignore */

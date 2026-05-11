@@ -171,6 +171,13 @@ export const posts = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     text: text('text').notNull(),
     imageUrl: text('image_url'),
+    /**
+     * Optional short video to attach to the post. mp4/webm/mov, up to
+     * the upload route's size cap. When set, the worker uploads it via
+     * the same Photo/Video composer button as images; FB accepts either.
+     * imageUrl takes precedence if both are set.
+     */
+    videoUrl: text('video_url'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -351,6 +358,13 @@ export const jobs = pgTable(
     // working campaign over a single DOM drift. Null on success or pre-iter5
     // legacy rows.
     failureKind: text('failure_kind'),
+    /**
+     * Last time the worker re-visited the group to verify whether a
+     * post that ended up in moderator-approval queue has since been
+     * approved (post visible) or rejected. Null = never rechecked.
+     * The cloud cron + worker periodic loop drive this.
+     */
+    lastRecheckedAt: timestamp('last_rechecked_at', { withTimezone: true }),
   },
   (t) => ({
     campaignIdx: index('jobs_campaign_id_idx').on(t.campaignId),

@@ -56,6 +56,7 @@ export const EINATURAL_DEFAULT_BRAND_KIT: BrandKit = {
   imageStyle:
     'טבעי, אור רך, גוונים אדמתיים (terracotta, sage green, sand, cream), נרות, אבנים חלקות, שמנים אתריים בבקבוקי זכוכית, צמחי מרפא, מגבות לבנות. ללא אנשים זרים בתמונה. ללא טקסט בתמונה. אווירת ספא יוקרתי בוטיק.',
   cta: 'להזמנת טיפול: WhatsApp / לפרטים נוספים בהודעה פרטית',
+  actionUrl: 'https://wizardposts.vercel.app/l/post',
   publishSlots: ['10:00', '18:00'],
 };
 
@@ -70,8 +71,20 @@ export interface BrandKit {
   hashtags: string[];
   /** Style guidance for the image-prompt builder. */
   imageStyle: string;
+  /**
+   * Optional public URL of a transparent (or solid) brand logo PNG.
+   * When set, the generator overlays it on the bottom-right of every
+   * produced image at ~12% width with 88% opacity.
+   */
+  logoUrl?: string;
   /** Default CTA copy ending the caption when no slot-specific override. */
   cta: string;
+  /**
+   * Optional action URL appended to every caption (separated by a blank
+   * line). Use the WizardPosts shortlink, e.g.
+   * `https://wizardposts.vercel.app/l/post`, so each click is logged.
+   */
+  actionUrl?: string;
   /** Daily publish slots in `HH:mm` (24-hour) format, Asia/Jerusalem. */
   publishSlots: string[];
 }
@@ -82,7 +95,9 @@ export const brandKitSchema = z.object({
   pillars: z.array(z.enum(PILLAR_IDS)).min(1).max(PILLAR_IDS.length),
   hashtags: z.array(z.string().min(1).max(60)).max(15),
   imageStyle: z.string().min(1).max(2000),
+  logoUrl: z.string().url().max(500).optional(),
   cta: z.string().min(1).max(500),
+  actionUrl: z.string().url().max(500).optional(),
   publishSlots: z
     .array(z.string().regex(/^([0-1]\d|2[0-3]):[0-5]\d$/))
     .min(1)

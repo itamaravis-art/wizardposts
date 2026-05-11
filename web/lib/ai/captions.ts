@@ -89,5 +89,14 @@ export async function generateCaptions(opts: {
   // Pad with the first variant if the model returned fewer than asked
   // (rare, but keeps the 3-variant contract for the UI).
   while (variants.length < count) variants.push(variants[0]!);
-  return variants.slice(0, count);
+  const trimmed = variants.slice(0, count);
+
+  // Append the action URL (e.g. WhatsApp shortlink) on its own line so
+  // every published post ends with a clickable link. We do this AFTER
+  // generation so we don't depend on the LLM remembering the exact URL.
+  const actionUrl = opts.brandKit.actionUrl?.trim();
+  if (actionUrl) {
+    return trimmed.map((v) => `${v.trimEnd()}\n\n${actionUrl}`);
+  }
+  return trimmed;
 }

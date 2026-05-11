@@ -67,8 +67,9 @@ export const supabaseAdmin: SupabaseClient = new Proxy({} as SupabaseClient, {
 
 const IMAGES_BUCKET = 'images';
 const SCREENSHOTS_BUCKET = 'screenshots';
+const VIDEOS_BUCKET = 'videos';
 
-export type StorageBucket = 'images' | 'screenshots';
+export type StorageBucket = 'images' | 'screenshots' | 'videos';
 
 function sanitizeFilename(name: string): string {
   const lower = (name || 'file').toLowerCase();
@@ -119,6 +120,34 @@ export async function uploadImage(
 
   const { data } = getAdminClient()
     .storage.from(IMAGES_BUCKET)
+    .getPublicUrl(objectPath);
+  return data.publicUrl;
+}
+
+/**
+ * Upload a public-read short video. Same shape as `uploadImage` but a
+ * dedicated bucket so MIME restrictions and CDN cache strategy can
+ * diverge later (videos are much larger than images).
+ */
+export async function uploadVideo(
+  userId: string,
+  file: File | Buffer,
+  originalName: string,
+): Promise<string> {
+  const objectPath = buildObjectPath(userId, originalName);
+  const { body, contentType } = await toUploadBody(file);
+
+  const { error } = await getAdminClient()
+    .storage.from(VIDEOS_BUCKET)
+    .upload(objectPath, body, {
+      contentType,
+      cacheControl: '3600',
+      upsert: false,
+    });
+  if (error) throw new Error(`Video upload failed: ${error.message}`);
+
+  const { data } = getAdminClient()
+    .storage.from(VIDEOS_BUCKET)
     .getPublicUrl(objectPath);
   return data.publicUrl;
 }

@@ -21,6 +21,9 @@ import {
 
 const MAX_TEXT = 5000;
 const MAX_IMG_BYTES = 8 * 1024 * 1024; // 8MB
+const MAX_VIDEO_BYTES = 100 * 1024 * 1024; // 100MB — matches server route
+const ALLOWED_IMAGE_RE = /^image\//i;
+const ALLOWED_VIDEO_RE = /^video\/(mp4|quicktime|webm|x-m4v)$/i;
 
 /**
  * Expand a single {a|b|c} token into its first variant. We don't fully expand
@@ -74,12 +77,19 @@ export default function NewPostPage() {
       setFile(null);
       return;
     }
-    if (!f.type.startsWith('image/')) {
-      setErrors((e) => ({ ...e, image: 'יש לבחור קובץ תמונה' }));
+    const isImage = ALLOWED_IMAGE_RE.test(f.type);
+    const isVideo = ALLOWED_VIDEO_RE.test(f.type);
+    if (!isImage && !isVideo) {
+      setErrors((e) => ({ ...e, image: 'יש לבחור קובץ תמונה (JPG/PNG/WEBP) או וידאו (MP4/MOV/WEBM)' }));
       return;
     }
-    if (f.size > MAX_IMG_BYTES) {
-      setErrors((e) => ({ ...e, image: 'התמונה גדולה מדי (מקסימום 8MB)' }));
+    const limit = isVideo ? MAX_VIDEO_BYTES : MAX_IMG_BYTES;
+    if (f.size > limit) {
+      const mb = Math.round(limit / 1024 / 1024);
+      setErrors((e) => ({
+        ...e,
+        image: isVideo ? `הוידאו גדול מדי (מקסימום ${mb}MB)` : `התמונה גדולה מדי (מקסימום ${mb}MB)`,
+      }));
       return;
     }
     setErrors((e) => ({ ...e, image: undefined }));
@@ -108,7 +118,12 @@ export default function NewPostPage() {
 
     const fd = new FormData();
     fd.append('text', text);
-    if (file) fd.append('image', file);
+    if (file) {
+      // Server accepts either 'image' or 'video' field name — pick by
+      // MIME so the right validation + bucket are used.
+      const fieldName = ALLOWED_VIDEO_RE.test(file.type) ? 'video' : 'image';
+      fd.append(fieldName, file);
+    }
 
     try {
       await toast.promise(apiUpload('/api/posts', fd), {
@@ -222,7 +237,7 @@ export default function NewPostPage() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
+                accept="image/*,video/mp4,video/quicktime,video/webm,video/x-m4v"
                 onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
                 className="hidden"
               />
@@ -230,10 +245,10 @@ export default function NewPostPage() {
                 <ImageIcon size={28} />
               </div>
               <div className="text-sm font-medium text-slate-700 dark:text-foreground">
-                גרור תמונה לכאן או לחץ לבחירה
+                גרור תמונה או וידאו לכאן או לחץ לבחירה
               </div>
               <div className="text-xs text-slate-500 mt-1">
-                JPG / PNG / WEBP · עד 8MB
+                תמונה (JPG / PNG / WEBP · עד 8MB) או וידאו (MP4 / MOV / WEBM · עד 100MB)
               </div>
             </div>
             {errors.image && (
@@ -292,11 +307,19 @@ export default function NewPostPage() {
 
                   {imagePreview ? (
                     <div className="relative bg-slate-100 dark:bg-surface-2">
-                      <img
-                        src={imagePreview}
-                        alt="תצוגה"
-                        className="w-full max-h-80 object-contain"
-                      />
+                      {file && ALLOWED_VIDEO_RE.test(file.type) ? (
+                        <video
+                          src={imagePreview}
+                          controls
+                          className="w-full max-h-80 object-contain bg-black"
+                        />
+                      ) : (
+                        <img
+                          src={imagePreview}
+                          alt="תצוגה"
+                          className="w-full max-h-80 object-contain"
+                        />
+                      )}
                       <button
                         type="button"
                         onClick={(e) => {
@@ -305,7 +328,7 @@ export default function NewPostPage() {
                           if (fileInputRef.current) fileInputRef.current.value = '';
                         }}
                         className="absolute top-2 left-2 bg-black/60 text-white rounded-full p-1.5 hover:bg-black/80 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
-                        aria-label="הסר תמונה"
+                        aria-label="הסר קובץ"
                       >
                         <X size={14} />
                       </button>

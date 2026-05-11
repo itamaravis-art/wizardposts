@@ -26,6 +26,7 @@ export async function createPost(input: {
   userId: string;
   text: string;
   imageUrl?: string | null;
+  videoUrl?: string | null;
 }): Promise<Post> {
   const [row] = await db
     .insert(posts)
@@ -33,6 +34,7 @@ export async function createPost(input: {
       userId: input.userId,
       text: input.text,
       imageUrl: input.imageUrl ?? null,
+      videoUrl: input.videoUrl ?? null,
     })
     .returning();
   if (!row) throw new Error('Failed to create post');
@@ -57,5 +59,5 @@ export const getPostForUser = (userId: string, id: string) => getPost(id, userId
 export const deletePostForUser = (userId: string, id: string) => deletePost(id, userId);
 export const createPostForUser = (
   userId: string,
-  input: { text: string; imageUrl?: string | null },
+  input: { text: string; imageUrl?: string | null; videoUrl?: string | null },
 ) => createPost({ userId, ...input });

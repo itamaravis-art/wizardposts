@@ -65,6 +65,8 @@ export interface JobPayload {
     id: string;
     text: string;
     image_url: string | null; // signed URL from Supabase Storage
+    /** Optional short video to attach instead of (or alongside) an image. */
+    video_url?: string | null;
   } | null;
   group: {
     id: string;

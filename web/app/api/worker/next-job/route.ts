@@ -128,6 +128,9 @@ export async function GET(req: NextRequest) {
             id: post.id,
             text: post.text,
             image_url: post.imageUrl,
+            // Short-video support — worker uses this when imageUrl is null.
+            // FB's composer accepts either via the Photo/Video file input.
+            video_url: post.videoUrl,
           }
         : null,
       group: group

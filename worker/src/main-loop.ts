@@ -154,14 +154,18 @@ async function runJob(jobPayload: JobPayload, settings: WorkerSettings): Promise
       );
     }
 
-    if (post.image_url) {
+    // Prefer image if both are present (image is faster to upload); fall
+    // back to video. FB's composer accepts either through the same Photo/
+    // Video file input.
+    const mediaUrl = post.image_url ?? post.video_url ?? null;
+    if (mediaUrl) {
       try {
-        imagePath = await downloadImageToTemp(post.image_url);
+        imagePath = await downloadImageToTemp(mediaUrl);
       } catch (err) {
-        logger.error({ err, jobId: job.id }, 'main-loop: image download failed');
+        logger.error({ err, jobId: job.id }, 'main-loop: media download failed');
         await reportResult(job.id, {
           success: false,
-          message: `Image download failed: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Media download failed: ${err instanceof Error ? err.message : String(err)}`,
           failureKind: 'network_error',
         });
         return { ok: false, kind: 'network_error' };
@@ -173,6 +177,10 @@ async function runJob(jobPayload: JobPayload, settings: WorkerSettings): Promise
       groupUrl: group.url,
       text: post.text,
       imagePath,
+      // Tell the poster what we're attaching so it can wait longer for
+      // video uploads (Playwright's image-preview wait is 30s, fine for
+      // images, marginal for short clips).
+      mediaKind: post.image_url ? 'image' : post.video_url ? 'video' : null,
       spinVariations: campaign?.text_variations ?? false,
       typingMinMs: settings.typing_min_ms,
       typingMaxMs: settings.typing_max_ms,

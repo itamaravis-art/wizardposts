@@ -24,6 +24,7 @@ function toPostWire(p: Record<string, unknown>): Record<string, unknown> {
   return {
     ...snake,
     imageUrl: p.imageUrl ?? null,
+    videoUrl: p.videoUrl ?? null,
     createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : (p.createdAt ?? null),
   };
 }
@@ -33,6 +34,7 @@ export const runtime = 'nodejs';
 const createSchema = z.object({
   text: z.string().min(1).max(5000),
   imageUrl: z.string().url().nullable().optional(),
+  videoUrl: z.string().url().nullable().optional(),
 });
 
 // GET /api/posts — list current user's posts (newest first, query layer's job).
@@ -56,6 +58,7 @@ export async function POST(req: NextRequest) {
 
     let text: string;
     let imageUrl: string | null = null;
+    let videoUrl: string | null = null;
 
     if (contentType.includes('multipart/form-data')) {
       const fd = await req.formData();
@@ -69,13 +72,21 @@ export async function POST(req: NextRequest) {
         const { uploadImage } = await import('@/lib/storage');
         imageUrl = await uploadImage(userId, image, image.name || 'image.jpg');
       }
+      // Video is multipart-only for inline upload; for the JSON path
+      // callers POST the URL after /api/posts/upload returned it.
+      const video = fd.get('video');
+      if (video && video instanceof File && video.size > 0) {
+        const { uploadVideo } = await import('@/lib/storage');
+        videoUrl = await uploadVideo(userId, video, video.name || 'video.mp4');
+      }
     } else {
       const body = createSchema.parse(await req.json());
       text = body.text;
       imageUrl = body.imageUrl ?? null;
+      videoUrl = body.videoUrl ?? null;
     }
 
-    const post = await createPostForUser(userId, { text, imageUrl });
+    const post = await createPostForUser(userId, { text, imageUrl, videoUrl });
     return NextResponse.json(toPostWire(post), { status: 201 });
   } catch (err) {
     return handleRouteError(err);

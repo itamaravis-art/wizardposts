@@ -19,7 +19,6 @@ import { getUserId, handleRouteError, HttpError } from '../../_lib/route-helpers
 import {
   exchangeShortLivedUserToken,
   listPagesWithTokens,
-  validatePageToken,
   debugToken,
   GraphError,
 } from '@/lib/fb/graph';
@@ -95,18 +94,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Sanity-check the Page token by calling /me on it.
-    try {
-      await validatePageToken(target.accessToken);
-    } catch (err) {
-      if (err instanceof GraphError) {
-        throw new HttpError(
-          400,
-          `הטוקן של הדף לא תקף: ${err.userMessage}. נסה לרענן ב-Graph Explorer.`,
-        );
-      }
-      throw err;
-    }
+    // 3. (skipped) — calling /me on the Page token requires
+    // `pages_read_engagement`, which isn't always granted in dev-mode
+    // Apps. /me/accounts already returned a valid id+name+token, and
+    // debug_token below confirms the token is alive, so no extra
+    // round-trip is needed here.
 
     // 4. Look up token expiry via debug_token.
     let expiresAt: Date | null = null;

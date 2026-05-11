@@ -16,6 +16,12 @@ export interface PostToGroupOpts {
   groupUrl: string;
   text: string;
   imagePath: string | null;
+  /**
+   * Kind of media at `imagePath` — affects how long we wait for FB's
+   * preview to appear. Videos can take 60+ seconds to upload + process;
+   * images appear in ~5-10 seconds. Null when there's no media.
+   */
+  mediaKind?: 'image' | 'video' | null;
   spinVariations: boolean;
   typingMinMs: number;
   typingMaxMs: number;
@@ -1006,11 +1012,24 @@ export async function postToGroup(opts: PostToGroupOpts): Promise<PostToGroupRes
       await fileInput.setInputFiles(absImage);
 
       const previewScope = scope === page ? page : (scope as Locator);
-      const preview = previewScope.locator('img[src^="blob:"], img[src*="scontent"]').first();
-      await preview.waitFor({ state: 'visible', timeout: 30000 }).catch(() => {
-        logger.warn({ jobId }, 'poster: image preview did not appear in 30s, continuing anyway');
+      const isVideo = opts.mediaKind === 'video';
+      // Video preview waits up to 120s: FB transcodes server-side and
+      // doesn't show the playable thumbnail until that completes.
+      // Images keep the original 30s budget.
+      const previewTimeout = isVideo ? 120_000 : 30_000;
+      const previewSel = isVideo
+        ? 'video, video[src^="blob:"], video[src*="scontent"], div[role="progressbar"][aria-valuenow="100"]'
+        : 'img[src^="blob:"], img[src*="scontent"]';
+      const preview = previewScope.locator(previewSel).first();
+      await preview.waitFor({ state: 'visible', timeout: previewTimeout }).catch(() => {
+        logger.warn(
+          { jobId, mediaKind: opts.mediaKind, previewTimeoutMs: previewTimeout },
+          'poster: media preview did not appear in time, continuing anyway',
+        );
       });
-      await readingPause(1500, 3000);
+      // Videos need extra settle time after preview appears — the
+      // submit button is enabled only once FB finishes its check.
+      await readingPause(isVideo ? 4000 : 1500, isVideo ? 8000 : 3000);
     }
 
     await readingPause(2000, 4000);

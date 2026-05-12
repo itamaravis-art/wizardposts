@@ -25,7 +25,24 @@ interface DailyTask {
   utcHour: number;         // 0-23
   utcMinute: number;       // 0-59
   lastRunDateUtc?: string; // YYYY-MM-DD — guards against double-fire on the same day
+  /**
+   * When true, after firing we check the JSON response for
+   * `totalGenerated === 0`. If so, the daily task is considered
+   * "fired but did nothing" — we reset `lastRunDateUtc` so the loop
+   * retries on the next tick (capped by `retriesToday`). This catches
+   * transient OpenAI / network failures that returned 200 OK with an
+   * empty result, which happened once in production and silently lost
+   * a daily post.
+   */
+  retryOnEmptyResult?: boolean;
+  /** Retries used today — reset when lastRunDateUtc advances. */
+  retriesToday?: number;
+  /** Earliest UTC ms to retry. Spaces out retries by ~10 min. */
+  nextRetryAt?: number;
 }
+
+const MAX_RETRIES_PER_DAY = 5;
+const RETRY_DELAY_MS = 10 * 60 * 1000;
 
 interface IntervalTask {
   name: string;
@@ -39,14 +56,21 @@ interface IntervalTask {
 const DAILY_TASKS: DailyTask[] = [
   // Generate runs at 22:00/22:15 IL = 19:00/19:15 UTC during DST. Run a
   // few minutes earlier in case the operator's clock is slightly off.
-  { name: 'generate@10:00', path: '/api/cron/generate?slot=10:00', utcHour: 19, utcMinute: 0 },
-  { name: 'generate@18:00', path: '/api/cron/generate?slot=18:00', utcHour: 19, utcMinute: 15 },
+  // retryOnEmptyResult: on 5/11 production we lost a daily post because
+  // the cron returned 200 OK with totalGenerated=0 silently. Retry up
+  // to 5×10min so a one-shot OpenAI hiccup doesn't kill a slot.
+  { name: 'generate@10:00', path: '/api/cron/generate?slot=10:00', utcHour: 19, utcMinute: 0,  retryOnEmptyResult: true },
+  { name: 'generate@18:00', path: '/api/cron/generate?slot=18:00', utcHour: 19, utcMinute: 15, retryOnEmptyResult: true },
   // 09:30 IL = 06:30 UTC.
   { name: 'skip-stale',    path: '/api/cron/skip-stale',    utcHour: 6,  utcMinute: 30 },
   // 07:00 IL = 04:00 UTC.
   { name: 'notify-pending',path: '/api/cron/notify-pending',utcHour: 4,  utcMinute: 0 },
   // 03:00 IL = 00:00 UTC (good window — quiet hours).
   { name: 'refresh-tokens',path: '/api/cron/refresh-tokens',utcHour: 0,  utcMinute: 0 },
+  // 23:00 IL = 20:00 UTC — runs AFTER the generate slots, sends a
+  // WhatsApp alert if we ended the day with <2 posts queued for
+  // tomorrow. Server-side endpoint added in this commit.
+  { name: 'check-generation',path: '/api/cron/check-generation', utcHour: 20, utcMinute: 0 },
 ];
 
 const INTERVAL_TASKS: IntervalTask[] = [
@@ -80,14 +104,24 @@ function inWindow(now: Date, hStart?: number, hEnd?: number): boolean {
   return h >= hStart || h <= hEnd;
 }
 
-async function fireCron(path: string, baseUrl: string, secret: string): Promise<void> {
+/** Result of a cron call: includes the parsed JSON body so callers can
+ *  decide whether to retry (e.g. on totalGenerated=0). */
+interface CronCallResult {
+  ok: boolean;
+  body?: unknown;
+}
+
+async function fireCron(
+  path: string,
+  baseUrl: string,
+  secret: string,
+): Promise<CronCallResult> {
   const url = baseUrl.replace(/\/$/, '') + path;
   const start = Date.now();
   try {
     const res = await fetch(url, {
       method: 'GET',
       headers: { Authorization: `Bearer ${secret}` },
-      // Match the cloud's 60s function ceiling.
       signal: AbortSignal.timeout(75_000),
     });
     const elapsedMs = Date.now() - start;
@@ -97,14 +131,22 @@ async function fireCron(path: string, baseUrl: string, secret: string): Promise<
         { path, status: res.status, body: body.slice(0, 200), elapsedMs },
         'scheduler: cron call returned non-OK',
       );
-      return;
+      return { ok: false };
+    }
+    let body: unknown = null;
+    try {
+      body = await res.json();
+    } catch {
+      /* not all crons return JSON */
     }
     logger.info({ path, elapsedMs }, 'scheduler: cron call succeeded');
+    return { ok: true, body };
   } catch (err) {
     logger.warn(
       { path, err: err instanceof Error ? err.message : String(err) },
       'scheduler: cron call threw',
     );
+    return { ok: false };
   }
 }
 
@@ -136,17 +178,59 @@ export async function startScheduler(): Promise<void> {
     const todayKey = utcDateKey(now);
 
     // Daily tasks: fire if we're past the scheduled time and we haven't
-    // already fired today.
+    // already fired today. retryOnEmptyResult tasks (generate) re-fire
+    // up to MAX_RETRIES_PER_DAY × RETRY_DELAY_MS apart when the cloud
+    // returns 200 OK but totalGenerated=0.
     for (const task of DAILY_TASKS) {
-      if (task.lastRunDateUtc === todayKey) continue;
+      // Reset retry counter at the start of each UTC day.
+      if (task.lastRunDateUtc !== todayKey) {
+        task.retriesToday = 0;
+        task.nextRetryAt = undefined;
+      }
+      // Skip if we already had a successful fire today (lastRunDateUtc
+      // set to today *and* not in retry mode).
+      const inRetryMode = task.retryOnEmptyResult && (task.retriesToday ?? 0) > 0;
+      if (task.lastRunDateUtc === todayKey && !inRetryMode) continue;
+
       const targetMinutes = task.utcHour * 60 + task.utcMinute;
       const nowMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
-      // 30-minute catch-up window: if we restart at 19:25 UTC and the
-      // 19:00 task hasn't fired today, fire it now.
-      if (nowMinutes >= targetMinutes && nowMinutes <= targetMinutes + 30) {
-        logger.info({ task: task.name }, 'scheduler: firing daily task');
-        await fireCron(task.path, apiBase, cronSecret);
+      const inFireWindow = nowMinutes >= targetMinutes && nowMinutes <= targetMinutes + 30;
+      const retryDue = inRetryMode && task.nextRetryAt && now.getTime() >= task.nextRetryAt;
+
+      if (inFireWindow || retryDue) {
+        logger.info(
+          { task: task.name, retry: task.retriesToday ?? 0 },
+          'scheduler: firing daily task',
+        );
+        const result = await fireCron(task.path, apiBase, cronSecret);
         task.lastRunDateUtc = todayKey;
+
+        // Inspect for "fired but did nothing" only on retry-eligible tasks.
+        if (
+          task.retryOnEmptyResult &&
+          result.ok &&
+          result.body &&
+          typeof result.body === 'object' &&
+          'totalGenerated' in result.body &&
+          (result.body as { totalGenerated: number }).totalGenerated === 0 &&
+          (task.retriesToday ?? 0) < MAX_RETRIES_PER_DAY
+        ) {
+          task.retriesToday = (task.retriesToday ?? 0) + 1;
+          task.nextRetryAt = now.getTime() + RETRY_DELAY_MS;
+          logger.warn(
+            { task: task.name, retry: task.retriesToday, nextInMs: RETRY_DELAY_MS },
+            'scheduler: generate returned totalGenerated=0 — will retry',
+          );
+        } else if (task.retryOnEmptyResult && result.ok && (task.retriesToday ?? 0) > 0) {
+          // Success on a retry — clear the retry budget so we don't
+          // re-enter the loop.
+          logger.info(
+            { task: task.name, retryUsed: task.retriesToday },
+            'scheduler: retry succeeded',
+          );
+          task.retriesToday = 0;
+          task.nextRetryAt = undefined;
+        }
       }
     }
 

@@ -246,7 +246,41 @@ export default function ShortlinkDetailPage() {
                   <tr key={`${g.group_id ?? 'none'}-${i}`} className="hover:bg-surface-2/40">
                     <td className="px-4 py-2.5">
                       <div className="font-medium truncate max-w-[260px]">
-                        {g.group_name || (
+                        {g.group_name ? (
+                          g.group_url ? (
+                            <a
+                              href={g.group_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="hover:text-brand-600 hover:underline"
+                            >
+                              {g.group_name}
+                            </a>
+                          ) : (
+                            g.group_name
+                          )
+                        ) : g.group_url ? (
+                          // Group has no `name` set (most rows in production are
+                          // like this — the group was added by URL without a
+                          // friendly name). Extract a useful identifier from
+                          // the URL instead of falsely showing "deleted".
+                          (() => {
+                            const m = g.group_url.match(
+                              /facebook\.com\/groups\/([^/?#]+)/i,
+                            );
+                            const ident = m?.[1] ?? g.group_url;
+                            return (
+                              <a
+                                href={g.group_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="hover:text-brand-600 hover:underline"
+                              >
+                                {/^\d+$/.test(ident) ? `קבוצה #${ident}` : ident}
+                              </a>
+                            );
+                          })()
+                        ) : (
                           <span className="text-muted-foreground italic">קבוצה נמחקה</span>
                         )}
                       </div>

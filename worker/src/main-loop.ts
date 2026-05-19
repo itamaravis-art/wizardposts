@@ -378,16 +378,31 @@ export async function startMainLoop(): Promise<void> {
       const outcome = await runJob(job, hb.settings);
 
       // Cooldown selection:
-      //   - On success: random delay between user's min/max (legitimate
-      //     spacing to look human).
+      //   - On success: random delay between the CAMPAIGN's min/max
+      //     (not the user-level default). Tuning a single campaign's
+      //     cadence via /campaigns/<id>/settings was previously a no-op
+      //     because the worker always read the user-wide defaults.
+      //     Per-campaign delay is what the UI exposes, so honor it.
+      //     Fall back to user-level when campaign values are missing
+      //     (older jobs created before this column was wired through).
       //   - On failure: per-failure-kind cooldown (transient kinds get
       //     short retries; permanent kinds get long back-offs).
       let wait: number;
       if (outcome.ok) {
-        const minD = Math.max(0, hb.settings.min_delay_ms);
-        const maxD = Math.max(minD, hb.settings.max_delay_ms);
+        const campMin = job.campaign?.min_delay_ms;
+        const campMax = job.campaign?.max_delay_ms;
+        const minD = Math.max(0, campMin ?? hb.settings.min_delay_ms);
+        const maxD = Math.max(minD, campMax ?? hb.settings.max_delay_ms);
         wait = minD + Math.floor(Math.random() * (maxD - minD + 1));
-        logger.info({ wait, reason: 'success' }, 'main-loop: cooling down before next iteration');
+        logger.info(
+          {
+            wait,
+            reason: 'success',
+            source: campMin !== undefined ? 'campaign' : 'user-default',
+            campaignId: job.campaign?.id ?? null,
+          },
+          'main-loop: cooling down before next iteration',
+        );
       } else {
         const kind = outcome.kind ?? 'unknown';
         wait = COOLDOWN_BY_KIND[kind] ?? COOLDOWN_BY_KIND.unknown;
